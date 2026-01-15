@@ -141,18 +141,5 @@ def main():
 
         raise
 
-    finally:
-        # OPTIONAL: If you want to ALWAYS unmount at the end of the script, enable this.
-        # If you prefer to keep it mounted for manual work, comment this block out.
-        if mounted:
-            try:
-                run(["sudo", "umount", mountpoint])
-            except Exception:
-                pass
-        try:
-            os.rmdir(mountpoint)
-        except Exception:
-            pass
-
 if __name__ == "__main__":
     main()
