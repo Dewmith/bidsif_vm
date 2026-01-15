@@ -3,7 +3,9 @@ import subprocess
 import tempfile
 from getpass import getpass
 
-MOUNTPOINT = "/home/crpn/mnt/crpn"
+# Base directory under which we create a unique mountpoint each run
+MOUNT_BASE = "/home/crpn/mnt"
+
 MOUNT_OPTS_BASE = "uid=1000,gid=1000,forceuid,forcegid,vers=3.0"
 
 def run(cmd):
@@ -62,6 +64,14 @@ def prompt_for_subdir_until_valid(base: str) -> str:
         print(f"Not found (or not a directory): {access_path}")
         print("Please re-enter the dataset subdirectory.")
 
+def make_unique_mountpoint() -> str:
+    """
+    Create a unique directory under MOUNT_BASE for this run.
+    Example: /home/crpn/mnt/cifs_ab12cd34
+    """
+    os.makedirs(MOUNT_BASE, exist_ok=True)
+    return tempfile.mkdtemp(prefix="cifs_", dir=MOUNT_BASE)
+
 def main():
     UNC = input(
         "Enter the UNC path to mount (e.g., //smb-crpn-isi-stj.univ-amu.fr/crpn$/USers/user_dir): "
@@ -71,7 +81,9 @@ def main():
     domain = "salsa"
     password = getpass("Password: ")
 
-    os.makedirs(MOUNTPOINT, exist_ok=True)
+    # NEW: unique mountpoint for this session
+    mountpoint = make_unique_mountpoint()
+    print(f"Using mountpoint: {mountpoint}")
 
     # Prefer RAM-backed runtime dir if available; fall back to /tmp
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
@@ -91,19 +103,21 @@ def main():
         opts = f"credentials={cred_path},{MOUNT_OPTS_BASE}"
 
         # Mount share
-        run(["sudo", "mount", "-t", "cifs", UNC, MOUNTPOINT, "-o", opts])
+        run(["sudo", "mount", "-t", "cifs", UNC, mountpoint, "-o", opts])
         mounted = True
 
         # Remove creds after successful mount
         run(["sudo", "rm", "-f", cred_path])
 
         # Now that the filesystem is mounted, prompt until a valid subdir is provided
-        subdir = prompt_for_subdir_until_valid(MOUNTPOINT)
-        access_path = build_access_path(MOUNTPOINT, subdir)
+        subdir = prompt_for_subdir_until_valid(mountpoint)
+        access_path = build_access_path(mountpoint, subdir)
 
         print("Mounted successfully. Credentials file removed.")
         print("Access your directory at:")
         print(access_path)
+
+        # Do your work here (or call another function) using access_path
 
     except Exception:
         # Best-effort cleanup of creds
@@ -112,13 +126,33 @@ def main():
         except Exception:
             pass
 
-        # If mount succeeded but later logic failed, consider unmounting to avoid lingering mounts
+        # If mount succeeded but later logic failed, unmount to avoid lingering mounts
         if mounted:
             try:
-                run(["sudo", "umount", MOUNTPOINT])
+                run(["sudo", "umount", mountpoint])
             except Exception:
                 pass
+
+        # Best-effort cleanup of mountpoint directory (only works if not mounted)
+        try:
+            os.rmdir(mountpoint)
+        except Exception:
+            pass
+
         raise
+
+    finally:
+        # OPTIONAL: If you want to ALWAYS unmount at the end of the script, enable this.
+        # If you prefer to keep it mounted for manual work, comment this block out.
+        if mounted:
+            try:
+                run(["sudo", "umount", mountpoint])
+            except Exception:
+                pass
+        try:
+            os.rmdir(mountpoint)
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()
