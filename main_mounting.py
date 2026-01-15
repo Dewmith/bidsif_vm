@@ -8,7 +8,7 @@ def run(cmd):
     subprocess.run(cmd, check=True)
 
 def main():
-    UNC = input("Enter the UNC path to mount (e.g., smb://smb-crpn-isi-stj.univ-amu.fr/crpn$/USers/directoryname): ").strip()
+    UNC = input("Enter the UNC path to mount (e.g., //smb-crpn-isi-stj.univ-amu.fr/crpn$/USers/directoryname): ").strip()
     username = input("Username: ").strip()
     domain = "salsa"
     password = getpass("Password: ")
