@@ -1,6 +1,7 @@
 import os
 import subprocess
 import tempfile
+import uuid
 
 MOUNT_BASE = "/home/crpn/mnt"
 MOUNT_OPTS_BASE = "uid=1000,gid=1000,forceuid,forcegid,vers=3.0"
@@ -9,6 +10,10 @@ DOMAIN = "salsa"
 def run(cmd):
     """Run a command and raise on failure."""
     subprocess.run(cmd, check=True)
+
+
+def subdir_exists_and_is_dir(path: str) -> bool:
+    return os.path.exists(path) and os.path.isdir(path)
 
 def sanitize_subdir(s: str) -> str:
     s = (s or "").strip().replace("\\", "/").lstrip("/")
@@ -23,30 +28,42 @@ def sanitize_subdir(s: str) -> str:
 def build_access_path(base: str, subdir: str) -> str:
     return os.path.join(base, subdir) if subdir else base
 
-def make_unique_mountpoint() -> str:
-    os.makedirs(MOUNT_BASE, exist_ok=True)
-    return tempfile.mkdtemp(prefix="cifs_", dir=MOUNT_BASE)
+def generate_mount_id() -> str:
+    """Stable ID suitable for DB primary key."""
+    return uuid.uuid4().hex  # 32 hex chars
 
-def mount_dataset(unc: str, username: str, password: str, subdir: str) -> tuple[str, str]:
+def make_mountpoint_from_id(mount_id: str) -> str:
     """
-    Mount the CIFS share to a unique mountpoint, validate subdir exists, and return:
-      (mountpoint, access_path)
+    Create a mountpoint directory derived from mount_id.
+    This makes the ID the source of truth, not the temp name.
+    """
+    os.makedirs(MOUNT_BASE, exist_ok=True)
+    mountpoint = os.path.join(MOUNT_BASE, f"cifs_{mount_id}")
+    os.makedirs(mountpoint, exist_ok=False)  # fail if collision (extremely unlikely)
+    return mountpoint
 
-    Raises Exception on any failure. Caller should record failure and let user resubmit.
+def mount_dataset(unc: str, username: str, password: str, subdir: str):
+    """
+    Mounts CIFS share to a mountpoint derived from a DB-safe ID, validates subdir once, returns:
+      (mount_id, mountpoint, access_path)
+
+    Raises on failure. Credentials file is deleted immediately after mount.
     """
     UNC = (unc or "").strip()
     username = (username or "").strip()
     password = password or ""
-    subdir = sanitize_subdir(subdir)
+    domain = DOMAIN  # <-- use constant
 
     if not UNC:
-        raise ValueError("UNC path is required")
+        raise ValueError("UNC is required")
     if not username:
         raise ValueError("Username is required")
-    if password == "":
+    if not password:
         raise ValueError("Password is required")
 
-    mountpoint = make_unique_mountpoint()
+    # (2) NEW: create DB-safe id + mountpoint from that id
+    mount_id = generate_mount_id()
+    mountpoint = make_mountpoint_from_id(mount_id)
 
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
     fd, cred_path = tempfile.mkstemp(prefix="cifs_", dir=runtime_dir)
@@ -57,42 +74,43 @@ def mount_dataset(unc: str, username: str, password: str, subdir: str) -> tuple[
         with open(cred_path, "w", encoding="utf-8") as f:
             f.write(f"username={username}\n")
             f.write(f"password={password}\n")
-            if DOMAIN:
-                f.write(f"domain={DOMAIN}\n")
+            if domain:
+                f.write(f"domain={domain}\n")
 
         os.chmod(cred_path, 0o600)
-
         opts = f"credentials={cred_path},{MOUNT_OPTS_BASE}"
 
-        # Mount share
         run(["sudo", "mount", "-t", "cifs", UNC, mountpoint, "-o", opts])
         mounted = True
 
-        # Remove creds after successful mount
+        # delete creds immediately after successful mount
         run(["sudo", "rm", "-f", cred_path])
 
-        # Validate subdir once (no prompting)
-        access_path = build_access_path(mountpoint, subdir)
-        if subdir != "" and not (os.path.exists(access_path) and os.path.isdir(access_path)):
+        subdir_clean = sanitize_subdir(subdir)
+        access_path = build_access_path(mountpoint, subdir_clean)
+
+        # validate subdir once
+        if subdir_clean != "" and not subdir_exists_and_is_dir(access_path):
             raise FileNotFoundError(f"Not found (or not a directory): {access_path}")
 
-        return mountpoint, access_path
+        # (3) NEW: return mount_id too (store this in DB)
+        return mount_id, mountpoint, access_path
 
     except Exception:
-        # Best-effort cleanup of creds
+        # best-effort cleanup creds
         try:
             run(["sudo", "rm", "-f", cred_path])
         except Exception:
             pass
 
-        # If mount succeeded but later logic failed, unmount
+        # if mounted, unmount
         if mounted:
             try:
                 run(["sudo", "umount", mountpoint])
             except Exception:
                 pass
 
-        # Best-effort cleanup of mountpoint directory
+        # remove mountpoint dir
         try:
             os.rmdir(mountpoint)
         except Exception:
@@ -101,7 +119,7 @@ def mount_dataset(unc: str, username: str, password: str, subdir: str) -> tuple[
         raise
 
 def unmount_and_cleanup(mountpoint: str):
-    """Always try to unmount and remove the mountpoint directory."""
+    """Best-effort unmount and delete mountpoint directory."""
     try:
         run(["sudo", "umount", mountpoint])
     except Exception:

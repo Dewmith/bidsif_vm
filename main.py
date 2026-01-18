@@ -1,75 +1,81 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from pathlib import Path
-from datetime import datetime, timezone
-import itertools
+import asyncio
+
+from main_mounting import mount_dataset
+from db import init_db, insert_mount_success, compute_output_path, list_mounts
 
 app = FastAPI()
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-if not STATIC_DIR.exists():
-    raise RuntimeError(f"Missing static directory: {STATIC_DIR}")
-
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-@app.get("/")
-def homepage():
-    return FileResponse(str(STATIC_DIR / "index.html"))
 
-@app.get("/ping")
-def ping():
-    return {"message": "BIDSIF API is alive"}
+# ---------- MODELS ----------
 
-# ---------- Jobs (in-memory for now) ----------
-
-class CreateJobRequest(BaseModel):
-    unc: str = Field(..., description="UNC path to mount, e.g. //server/share")
-    subdir: str = Field("", description="Subdirectory inside share (optional)")
-    username: str = Field(..., description="SMB username")
-    password: str = Field(..., description="SMB password (never stored)")
-
-class Job(BaseModel):
-    job_id: int
-    created_at: str
-    status: str  # queued|running|success|failed (for now)
+class SubmitRequest(BaseModel):
     unc: str
     subdir: str = ""
     username: str
-    error: str | None = None
+    password: str
 
-_job_id_counter = itertools.count(1)
-_jobs: list[Job] = []
 
-def now_iso():
-    return datetime.now(timezone.utc).isoformat()
+# ---------- ROUTES ----------
 
-@app.post("/jobs", response_model=Job)
-def create_job(req: CreateJobRequest):
-    # Basic validation (front-end already checks, but backend must too)
-    if not req.unc.strip():
-        raise HTTPException(status_code=400, detail="unc is required")
-    if not req.username.strip():
-        raise HTTPException(status_code=400, detail="username is required")
-    if not req.password:
-        raise HTTPException(status_code=400, detail="password is required")
+@app.get("/")
+def home():
+    return FileResponse(str(STATIC_DIR / "index.html"))
 
-    job = Job(
-        job_id=next(_job_id_counter),
-        created_at=now_iso(),
-        status="queued",
-        unc=req.unc.strip(),
-        subdir=(req.subdir or "").strip(),
-        username=req.username.strip(),
-        error=None,
+
+@app.get("/mounts")
+def get_mounts():
+    return list_mounts()
+
+
+@app.post("/submit")
+async def submit(req: SubmitRequest):
+    # 1) MOUNT IMMEDIATELY
+    try:
+        mount_id, mountpoint, access_path = await asyncio.to_thread(
+            mount_dataset,
+            req.unc,
+            req.username,
+            req.password,
+            req.subdir
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # 2) COMPUTE OUTPUT PATH
+    output_path = compute_output_path(mountpoint, req.subdir)
+
+    # 3) WRITE TO DB (ONLY AFTER SUCCESSFUL MOUNT)
+    insert_mount_success(
+        mount_id=mount_id,
+        username=req.username,
+        unc=req.unc,
+        subdir=req.subdir,
+        access_path=access_path,
+        output_path=output_path,
+        status="mounted"
     )
 
-    _jobs.insert(0, job)  # newest first for UI convenience
-    return job
+    return {
+        "mount_id": mount_id,
+        "mountpoint": mountpoint,
+        "access_path": access_path,
+        "output_path": output_path,
+        "status": "mounted"
+    }
 
-@app.get("/jobs", response_model=list[Job])
-def list_jobs():
-    return _jobs
+
+# ---------- STARTUP ----------
+
+@app.on_event("startup")
+async def startup():
+    init_db()
