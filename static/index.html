@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>BIDSIF Console</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; max-width: 1100px; }
+    h1 { margin: 0; }
+    .muted { color: #666; margin-top: 6px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 14px; margin-top: 16px; }
+    label { display: block; font-size: 12px; color: #444; margin-top: 10px; }
+    input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 10px; margin-top: 4px; }
+    button { padding: 10px 12px; border: 1px solid #222; border-radius: 10px; background: #111; color: #fff; cursor: pointer; }
+    button.secondary { background: #fff; color: #111; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; font-size: 14px; }
+    th { color: #333; font-size: 13px; }
+    .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; border: 1px solid #ccc; }
+    .queued { background: #fff7e6; }
+    .running { background: #e8f4ff; }
+    .success { background: #e7f7ee; }
+    .failed { background: #ffe8ea; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; }
+    .actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+    .err { color: #b00020; font-weight: 600; }
+    .ok { color: #0a7a2f; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>BIDSIF Console</h1>
+  <div class="muted">Prototype UI: submit jobs + watch status. (Next step: real mounting + 4-worker queue + DB)</div>
+
+  <div class="card">
+    <h3>Submit job</h3>
+
+    <div class="row">
+      <div>
+        <label>UNC path</label>
+        <input id="unc" placeholder='//smb-server/share/path' />
+      </div>
+      <div>
+        <label>Subdirectory inside share (optional)</label>
+        <input id="subdir" placeholder='folder_1/dataset (or empty for root)' />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Username</label>
+        <input id="username" placeholder="weerasena.d" />
+      </div>
+      <div>
+        <label>Password</label>
+        <input id="password" type="password" placeholder="(not stored)" />
+      </div>
+    </div>
+
+    <div class="actions">
+      <button onclick="submitJob()">Submit</button>
+      <button class="secondary" onclick="refreshJobs()">Refresh</button>
+      <span id="submitStatus" class="muted"></span>
+    </div>
+
+    <div id="submitOut" class="mono"></div>
+  </div>
+
+  <div class="card">
+    <h3>Jobs</h3>
+    <div class="muted">Auto-refresh every 2 seconds.</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Job ID</th>
+          <th>Created</th>
+          <th>Status</th>
+          <th>UNC</th>
+          <th>Subdir</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody id="jobsBody">
+        <tr><td colspan="6" class="muted">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+<script>
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      ...options
+    });
+    const text = await res.text();
+    let data;
+    try { data = text ? JSON.parse(text) : null; }
+    catch { data = text; }
+
+    if (!res.ok) {
+      const detail = data && data.detail ? data.detail : data;
+      throw { status: res.status, detail };
+    }
+    return data;
+  }
+
+  function escapeHtml(s) {
+    return (s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+  }
+
+  function statusPill(status) {
+    const cls = status === "queued" ? "queued"
+      : status === "running" ? "running"
+      : status === "success" ? "success"
+      : status === "failed" ? "failed"
+      : "";
+    return `<span class="pill ${cls}">${escapeHtml(status)}</span>`;
+  }
+
+  async function submitJob() {
+    const unc = document.getElementById("unc").value.trim();
+    const subdir = document.getElementById("subdir").value.trim();
+    const username = document.getElementById("username").value.trim();
+    const password = document.getElementById("password").value;
+
+    const statusEl = document.getElementById("submitStatus");
+    const outEl = document.getElementById("submitOut");
+    statusEl.textContent = "";
+    outEl.textContent = "";
+
+    if (!unc || !username || !password) {
+      statusEl.innerHTML = '<span class="err">UNC, username, and password are required.</span>';
+      return;
+    }
+
+    statusEl.textContent = "Submitting…";
+
+    try {
+      const data = await api("/jobs", {
+        method: "POST",
+        body: JSON.stringify({ unc, subdir, username, password })
+      });
+
+      statusEl.innerHTML = '<span class="ok">Submitted.</span>';
+      outEl.textContent = JSON.stringify(data, null, 2);
+
+      // Clear password field after submit
+      document.getElementById("password").value = "";
+
+      await refreshJobs();
+    } catch (e) {
+      statusEl.innerHTML = `<span class="err">Error (${e.status}).</span>`;
+      outEl.textContent = JSON.stringify(e.detail || e, null, 2);
+    }
+  }
+
+  async function refreshJobs() {
+    const body = document.getElementById("jobsBody");
+    try {
+      const jobs = await api("/jobs");
+      if (!jobs.length) {
+        body.innerHTML = `<tr><td colspan="6" class="muted">No jobs yet.</td></tr>`;
+        return;
+      }
+      body.innerHTML = jobs.map(j => `
+        <tr>
+          <td>${escapeHtml(String(j.job_id))}</td>
+          <td>${escapeHtml(j.created_at || "")}</td>
+          <td>${statusPill(j.status)}</td>
+          <td title="${escapeHtml(j.unc)}">${escapeHtml(j.unc).slice(0, 60)}</td>
+          <td>${escapeHtml(j.subdir || "")}</td>
+          <td class="mono">${escapeHtml(j.error || "")}</td>
+        </tr>
+      `).join("");
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="6" class="err">Failed to load jobs: ${escapeHtml(JSON.stringify(e.detail || e))}</td></tr>`;
+    }
+  }
+
+  refreshJobs();
+  setInterval(refreshJobs, 2000);
+</script>
+</body>
+</html>

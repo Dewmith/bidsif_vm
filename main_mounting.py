@@ -1,26 +1,17 @@
 import os
 import subprocess
 import tempfile
-from getpass import getpass
 
-# Base directory under which we create a unique mountpoint each run
 MOUNT_BASE = "/home/crpn/mnt"
-
 MOUNT_OPTS_BASE = "uid=1000,gid=1000,forceuid,forcegid,vers=3.0"
+DOMAIN = "salsa"
 
 def run(cmd):
     """Run a command and raise on failure."""
     subprocess.run(cmd, check=True)
 
 def sanitize_subdir(s: str) -> str:
-    """
-    Normalize a user-provided subpath inside the mounted share.
-
-    - Removes leading slashes so os.path.join(base, subdir) behaves correctly.
-    - Converts backslashes to forward slashes (Windows-style pastes).
-    - Blocks '..' traversal for safety.
-    """
-    s = s.strip().replace("\\", "/").lstrip("/")
+    s = (s or "").strip().replace("\\", "/").lstrip("/")
     if s == "" or s == ".":
         return ""
 
@@ -30,62 +21,33 @@ def sanitize_subdir(s: str) -> str:
     return "/".join(parts)
 
 def build_access_path(base: str, subdir: str) -> str:
-    """Return the full path to the intended dataset directory."""
     return os.path.join(base, subdir) if subdir else base
 
-def subdir_exists_and_is_dir(path: str) -> bool:
-    return os.path.exists(path) and os.path.isdir(path)
-
-def prompt_for_subdir_until_valid(base: str) -> str:
-    """
-    Ask user for a dataset subdirectory (relative to mountpoint) and keep asking
-    until it exists (or user leaves empty to use the share root).
-    """
-    while True:
-        raw = input(
-            "Dataset subdirectory inside the share (e.g., folder_1/dataset). "
-            "Leave empty for root: "
-        )
-        try:
-            subdir = sanitize_subdir(raw)
-        except ValueError as e:
-            print(f"Invalid subdirectory: {e}")
-            continue
-
-        access_path = build_access_path(base, subdir)
-
-        # If user chose root, accept immediately (root will exist after mount).
-        if subdir == "":
-            return subdir
-
-        if subdir_exists_and_is_dir(access_path):
-            return subdir
-
-        print(f"Not found (or not a directory): {access_path}")
-        print("Please re-enter the dataset subdirectory.")
-
 def make_unique_mountpoint() -> str:
-    """
-    Create a unique directory under MOUNT_BASE for this run.
-    Example: /home/crpn/mnt/cifs_ab12cd34
-    """
     os.makedirs(MOUNT_BASE, exist_ok=True)
     return tempfile.mkdtemp(prefix="cifs_", dir=MOUNT_BASE)
 
-def main():
-    UNC = input(
-        "Enter the UNC path to mount (e.g., //smb-crpn-isi-stj.univ-amu.fr/crpn$/USers/user_dir): "
-    ).strip()
+def mount_dataset(unc: str, username: str, password: str, subdir: str) -> tuple[str, str]:
+    """
+    Mount the CIFS share to a unique mountpoint, validate subdir exists, and return:
+      (mountpoint, access_path)
 
-    username = input("Username: ").strip()
-    domain = "salsa"
-    password = getpass("Password: ")
+    Raises Exception on any failure. Caller should record failure and let user resubmit.
+    """
+    UNC = (unc or "").strip()
+    username = (username or "").strip()
+    password = password or ""
+    subdir = sanitize_subdir(subdir)
 
-    # NEW: unique mountpoint for this session
+    if not UNC:
+        raise ValueError("UNC path is required")
+    if not username:
+        raise ValueError("Username is required")
+    if password == "":
+        raise ValueError("Password is required")
+
     mountpoint = make_unique_mountpoint()
-    print(f"Using mountpoint: {mountpoint}")
 
-    # Prefer RAM-backed runtime dir if available; fall back to /tmp
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
     fd, cred_path = tempfile.mkstemp(prefix="cifs_", dir=runtime_dir)
     os.close(fd)
@@ -95,8 +57,8 @@ def main():
         with open(cred_path, "w", encoding="utf-8") as f:
             f.write(f"username={username}\n")
             f.write(f"password={password}\n")
-            if domain:
-                f.write(f"domain={domain}\n")
+            if DOMAIN:
+                f.write(f"domain={DOMAIN}\n")
 
         os.chmod(cred_path, 0o600)
 
@@ -109,15 +71,12 @@ def main():
         # Remove creds after successful mount
         run(["sudo", "rm", "-f", cred_path])
 
-        # Now that the filesystem is mounted, prompt until a valid subdir is provided
-        subdir = prompt_for_subdir_until_valid(mountpoint)
+        # Validate subdir once (no prompting)
         access_path = build_access_path(mountpoint, subdir)
+        if subdir != "" and not (os.path.exists(access_path) and os.path.isdir(access_path)):
+            raise FileNotFoundError(f"Not found (or not a directory): {access_path}")
 
-        print("Mounted successfully. Credentials file removed.")
-        print("Access your directory at:")
-        print(access_path)
-
-        # Do your work here (or call another function) using access_path
+        return mountpoint, access_path
 
     except Exception:
         # Best-effort cleanup of creds
@@ -126,14 +85,14 @@ def main():
         except Exception:
             pass
 
-        # If mount succeeded but later logic failed, unmount to avoid lingering mounts
+        # If mount succeeded but later logic failed, unmount
         if mounted:
             try:
                 run(["sudo", "umount", mountpoint])
             except Exception:
                 pass
 
-        # Best-effort cleanup of mountpoint directory (only works if not mounted)
+        # Best-effort cleanup of mountpoint directory
         try:
             os.rmdir(mountpoint)
         except Exception:
@@ -141,5 +100,13 @@ def main():
 
         raise
 
-if __name__ == "__main__":
-    main()
+def unmount_and_cleanup(mountpoint: str):
+    """Always try to unmount and remove the mountpoint directory."""
+    try:
+        run(["sudo", "umount", mountpoint])
+    except Exception:
+        pass
+    try:
+        os.rmdir(mountpoint)
+    except Exception:
+        pass
