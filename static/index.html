@@ -1,11 +1,11 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>BIDSIF Console</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 24px; }
+    body { font-family: system-ui, sans-serif; max-width: 1400px; margin: 24px; }
     h1 { margin: 0; }
     .muted { color:#666; margin-top:6px; }
     .card { border:1px solid #ddd; border-radius:12px; padding:14px; margin-top:16px; }
@@ -14,18 +14,35 @@
     input { width:100%; padding:10px; border:1px solid #ccc; border-radius:10px; margin-top:4px; }
     button { padding:10px 14px; border:1px solid #222; border-radius:10px; background:#111; color:#fff; cursor:pointer; }
     button.secondary { background:#fff; color:#111; }
-    pre { background:#111; color:#eee; padding:12px; border-radius:10px; overflow:auto; }
-    table { width:100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align:left; font-size:14px; }
+    pre { background:#111; color:#eee; padding:12px; border-radius:10px; overflow:auto; max-height: 340px; }
+    table { width:100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
+    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align:left; font-size:14px; vertical-align: top; }
     th { font-size: 13px; color:#333; }
     .err { color:#b00020; font-weight:600; }
     .ok { color:#0a7a2f; font-weight:600; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+    /* Table wrapper makes it horizontally scrollable if needed */
+    .table-wrap { overflow-x: auto; }
+
+    /* Truncate long text but show full value on hover (via title attr) */
+    .trunc {
+      max-width: 520px;
+      display: inline-block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: bottom;
+    }
   </style>
 </head>
+
 <body>
   <h1>BIDSIF Console</h1>
-  <div class="muted">This UI calls <span class="mono">POST /submit</span> and <span class="mono">GET /mounts</span>.</div>
+  <div class="muted">
+    UI calls <span class="mono">POST /submit</span> and <span class="mono">GET /mounts</span>.
+    The table shows only user-facing info; VM paths are kept for the code later.
+  </div>
 
   <div class="card">
     <h3>Submit mount</h3>
@@ -37,7 +54,7 @@
       </div>
       <div>
         <label>Subdirectory inside share (optional)</label>
-        <input id="subdir" placeholder='Dewmith_W' />
+        <input id="subdir" placeholder='sub_a/sub_b/dewmith_w' />
       </div>
     </div>
 
@@ -58,28 +75,31 @@
       <span id="status" class="muted"></span>
     </div>
 
-    <pre id="out"></pre>
+    <h4 style="margin-top:14px; margin-bottom:8px;">Response</h4>
+    <pre id="out">{}</pre>
   </div>
 
   <div class="card">
     <h3>DB rows (mounts)</h3>
-    <div class="muted">Auto-refresh every 2 seconds.</div>
-    <table>
-      <thead>
-        <tr>
-          <th>created_at</th>
-          <th>username</th>
-          <th>mount_id</th>
-          <th>subdir</th>
-          <th>access_path</th>
-          <th>output_path</th>
-          <th>status</th>
-        </tr>
-      </thead>
-      <tbody id="rows">
-        <tr><td colspan="7" class="muted">Loading…</td></tr>
-      </tbody>
-    </table>
+    <div class="muted">Auto-refresh every 2 seconds. Hover long fields to see the full value.</div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 240px;">created_at</th>
+            <th style="width: 140px;">username</th>
+            <th style="width: 280px;">mount_id</th>
+            <th style="width: 220px;">subdir</th>
+            <th style="width: 520px;">reference output path</th>
+            <th style="width: 110px;">status</th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <tr><td colspan="6" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
 <script>
@@ -95,7 +115,32 @@
     return data;
   }
 
-  function esc(s){ return (s ?? "").toString().replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;"); }
+  function esc(s){
+    return (s ?? "").toString()
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;");
+  }
+
+  // If the backend doesn't store reference_output_path in DB, we compute it here.
+  function computeReferenceOutputPath(unc, subdir) {
+    const u = (unc || "").trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    const parts = u.split("/");
+
+    let idx = -1;
+    for (let i = 0; i < parts.length; i++) {
+      if ((parts[i] || "").toLowerCase() === "users") { idx = i; break; }
+    }
+    const base = idx >= 0 ? parts.slice(idx).join("/") : parts.slice(-2).join("/");
+
+    const s = (subdir || "").trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    if (!s) return `${base}/BIDSIFied_ROOT`;
+
+    const sp = s.split("/");
+    const parent = sp.slice(0, -1).join("/");
+    const last = sp[sp.length - 1];
+    return parent ? `${base}/${parent}/BIDSIFied_${last}` : `${base}/BIDSIFied_${last}`;
+  }
 
   async function submitMount(){
     const status = document.getElementById("status");
@@ -104,11 +149,18 @@
     out.textContent = "";
 
     const payload = {
-      unc: document.getElementById("unc").value.trim(),
-      subdir: document.getElementById("subdir").value.trim(),
-      username: document.getElementById("username").value.trim(),
-      password: document.getElementById("password").value
-    };
+    unc: document.getElementById("unc").value.trim(),
+    subdir: document.getElementById("subdir").value.trim(),
+    username: document.getElementById("username").value.trim(),
+    password: document.getElementById("password").value
+  };
+
+  if (!payload.subdir) {
+    status.innerHTML = '<span class="err">Subdirectory is required.</span>';
+    out.textContent = "Please enter a subdirectory (e.g. sub_a/sub_b/dewmith_w).";
+    return;
+  }
+
 
     try {
       const data = await api("/submit", {method:"POST", body: JSON.stringify(payload)});
@@ -127,22 +179,25 @@
     try{
       const rows = await api("/mounts");
       if (!rows || rows.length === 0){
-        rowsEl.innerHTML = `<tr><td colspan="7" class="muted">No rows yet.</td></tr>`;
+        rowsEl.innerHTML = `<tr><td colspan="6" class="muted">No rows yet.</td></tr>`;
         return;
       }
-      rowsEl.innerHTML = rows.map(r => `
-        <tr>
-          <td class="mono">${esc(r.created_at)}</td>
-          <td>${esc(r.username)}</td>
-          <td class="mono">${esc(r.mount_id)}</td>
-          <td>${esc(r.subdir)}</td>
-          <td class="mono">${esc(r.access_path).slice(0,60)}</td>
-          <td class="mono">${esc(r.output_path).slice(0,60)}</td>
-          <td>${esc(r.status)}</td>
-        </tr>
-      `).join("");
+
+      rowsEl.innerHTML = rows.map(r => {
+        const refOut = r.reference_output_path || computeReferenceOutputPath(r.unc, r.subdir);
+        return `
+          <tr>
+            <td class="mono">${esc(r.created_at)}</td>
+            <td>${esc(r.username)}</td>
+            <td class="mono"><span class="trunc" title="${esc(r.mount_id)}">${esc(r.mount_id)}</span></td>
+            <td><span class="trunc" title="${esc(r.subdir)}">${esc(r.subdir)}</span></td>
+            <td class="mono"><span class="trunc" title="${esc(refOut)}">${esc(refOut)}</span></td>
+            <td>${esc(r.status)}</td>
+          </tr>
+        `;
+      }).join("");
     } catch(e){
-      rowsEl.innerHTML = `<tr><td colspan="7" class="err">Failed: ${esc(JSON.stringify(e.detail))}</td></tr>`;
+      rowsEl.innerHTML = `<tr><td colspan="6" class="err">Failed: ${esc(JSON.stringify(e.detail))}</td></tr>`;
     }
   }
 

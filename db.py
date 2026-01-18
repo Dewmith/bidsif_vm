@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -17,7 +16,6 @@ def now_iso() -> str:
 
 
 def get_conn() -> sqlite3.Connection:
-    # sqlite is safe for a small local VM app like this
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     return con
@@ -29,11 +27,17 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS mounts (
                 mount_id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
+
                 username TEXT NOT NULL,
                 unc TEXT NOT NULL,
                 subdir TEXT NOT NULL,
-                access_path TEXT NOT NULL,
-                output_path TEXT NOT NULL,
+
+                input_path TEXT NOT NULL,     -- VM path used by code (hidden from user)
+                output_path TEXT NOT NULL,    -- VM path used by code (hidden from user)
+
+                input_ref TEXT NOT NULL,      -- user-friendly reference path
+                output_ref TEXT NOT NULL,     -- user-friendly reference path
+
                 status TEXT NOT NULL,
                 error TEXT
             )
@@ -44,25 +48,73 @@ def init_db() -> None:
         con.commit()
 
 
-def compute_folder_id_from_subdir(subdir: str) -> str:
-    """
-    Your rule: last path component of subdir.
-    If subdir is empty -> ROOT.
-    """
-    s = (subdir or "").strip().replace("\\", "/").strip("/")
-    return os.path.basename(s) if s else "ROOT"
-
-
 def compute_output_path(mountpoint: str, subdir: str) -> str:
     """
-    output path rule:
-      output_dir = mountpoint + "/BIDSIFied_" + last(subdir)
-    Example:
-      subdir="Dewmith_W" -> ".../BIDSIFied_Dewmith_W"
+    subdir: sub_a/sub_b/dewmith_w
+    output: mountpoint/sub_a/sub_b/BIDSIFied_dewmith_w
     """
-    folder_id = compute_folder_id_from_subdir(subdir)
-    out_dirname = f"BIDSIFied_{folder_id}"
-    return str(Path(mountpoint) / out_dirname)
+    clean = (subdir or "").strip().replace("\\", "/").strip("/")
+    if not clean:
+        return f"{mountpoint}/BIDSIFied_ROOT"
+
+    parts = clean.split("/")
+    parent = "/".join(parts[:-1])
+    last = parts[-1]
+    out_folder = f"BIDSIFied_{last}"
+    return f"{mountpoint}/{parent}/{out_folder}" if parent else f"{mountpoint}/{out_folder}"
+
+
+def compute_input_ref(unc: str, subdir: str) -> str:
+    """
+    User-visible path for the input dataset.
+    Example:
+      UNC: //.../crpn$/USers/Weerasena_D
+      subdir: sub_a/sub_b/dewmith_w
+      -> Users/Weerasena_D/sub_a/sub_b/dewmith_w
+    """
+    base = _extract_users_base_from_unc(unc)
+    s = (subdir or "").strip().replace("\\", "/").strip("/")
+    return f"{base}/{s}" if s else base
+
+
+def compute_output_ref(unc: str, subdir: str) -> str:
+    """
+    User-visible output reference path.
+    subdir: sub_a/sub_b/dewmith_w
+    -> Users/Weerasena_D/sub_a/sub_b/BIDSIFied_dewmith_w
+    """
+    base = _extract_users_base_from_unc(unc)
+    s = (subdir or "").strip().replace("\\", "/").strip("/")
+    if not s:
+        return f"{base}/BIDSIFied_ROOT"
+
+    parts = s.split("/")
+    parent = "/".join(parts[:-1])
+    last = parts[-1]
+    out_folder = f"BIDSIFied_{last}"
+    return f"{base}/{parent}/{out_folder}" if parent else f"{base}/{out_folder}"
+
+
+def _extract_users_base_from_unc(unc: str) -> str:
+    """
+    Extract the UNC tail starting at Users (case-insensitive),
+    fallback to last 2 segments.
+    Returns e.g. 'USers/Weerasena_D' (we normalize to 'Users/...')
+    """
+    u = (unc or "").strip().replace("\\", "/").strip("/")
+    parts = u.split("/")
+
+    idx = None
+    for i, p in enumerate(parts):
+        if p.lower() == "users":
+            idx = i
+            break
+
+    tail = parts[idx:] if idx is not None else parts[-2:]
+    # Normalize 'USers' -> 'Users'
+    if tail and tail[0].lower() == "users":
+        tail[0] = "Users"
+    return "/".join(tail)
 
 
 def insert_mount_success(
@@ -71,23 +123,32 @@ def insert_mount_success(
     username: str,
     unc: str,
     subdir: str,
-    access_path: str,
+    input_path: str,
     output_path: str,
+    input_ref: str,
+    output_ref: str,
     status: str = "mounted",
 ) -> None:
     with get_conn() as con:
         con.execute("""
             INSERT INTO mounts (
-                mount_id, created_at, username, unc, subdir, access_path, output_path, status, error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                mount_id, created_at,
+                username, unc, subdir,
+                input_path, output_path,
+                input_ref, output_ref,
+                status, error
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """, (
             mount_id,
             now_iso(),
             username,
             unc,
             subdir,
-            access_path,
+            input_path,
             output_path,
+            input_ref,
+            output_ref,
             status,
         ))
         con.commit()
@@ -104,11 +165,31 @@ def update_mount_status(mount_id: str, status: str, error: Optional[str] = None)
 
 
 def list_mounts(limit: int = 50):
+    """
+    IMPORTANT: This returns ONLY user-visible fields.
+    No VM paths in the API output.
+    """
     with get_conn() as con:
         rows = con.execute("""
-            SELECT mount_id, created_at, username, unc, subdir, access_path, output_path, status, error
+            SELECT
+              mount_id, created_at, username, unc, subdir,
+              input_ref, output_ref,
+              status, error
             FROM mounts
             ORDER BY created_at DESC
             LIMIT ?
         """, (limit,)).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_internal_paths(mount_id: str):
+    """
+    For the worker later: fetch VM paths without exposing them publicly.
+    """
+    with get_conn() as con:
+        row = con.execute("""
+            SELECT input_path, output_path
+            FROM mounts
+            WHERE mount_id = ?
+        """, (mount_id,)).fetchone()
+        return dict(row) if row else None
