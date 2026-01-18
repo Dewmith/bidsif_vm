@@ -66,7 +66,7 @@
 
     <div style="display:flex; gap:10px; align-items:center; margin-top:12px;">
       <button onclick="submitMount()">Submit</button>
-      <button class="secondary" onclick="refreshMounts()">Refresh</button>
+      <button class="secondary" onclick="clearFields()">Clear</button>
       <span id="status" class="muted"></span>
     </div>
 
@@ -137,6 +137,16 @@
     return parent ? `${base}/${parent}/BIDSIFied_${last}` : `${base}/BIDSIFied_${last}`;
   }
 
+  function clearFields() {
+    document.getElementById("unc").value = "";
+    document.getElementById("subdir").value = "";
+    document.getElementById("username").value = "";
+    document.getElementById("password").value = "";
+
+    document.getElementById("status").textContent = "";
+    document.getElementById("out").textContent = "{}";
+  }
+
   async function submitMount(){
     const status = document.getElementById("status");
     const out = document.getElementById("out");
@@ -144,18 +154,28 @@
     out.textContent = "";
 
     const payload = {
-    unc: document.getElementById("unc").value.trim(),
-    subdir: document.getElementById("subdir").value.trim(),
-    username: document.getElementById("username").value.trim(),
-    password: document.getElementById("password").value
-  };
+      unc: document.getElementById("unc").value.trim(),
+      subdir: document.getElementById("subdir").value.trim(),
+      username: document.getElementById("username").value.trim(),
+      password: document.getElementById("password").value
+    };
 
-  if (!payload.subdir) {
-    status.innerHTML = '<span class="err">Subdirectory is required.</span>';
-    out.textContent = "Please enter a subdirectory (e.g. sub_a/sub_b/dewmith_w).";
-    return;
-  }
+    // If absolutely nothing is entered
+    const nothingEntered =
+      !payload.unc && !payload.subdir && !payload.username && !payload.password;
 
+    if (nothingEntered) {
+      status.innerHTML = '<span class="err">Enter data before submission.</span>';
+      out.textContent = "Enter data before submission.";
+      return;
+    }
+
+    // Keep your rule: subdir is required
+    if (!payload.subdir) {
+      status.innerHTML = '<span class="err">Subdirectory is required.</span>';
+      out.textContent = "Please enter a subdirectory (e.g. sub_a/sub_b/dataset_name).";
+      return;
+    }
 
     try {
       const data = await api("/submit", {method:"POST", body: JSON.stringify(payload)});
