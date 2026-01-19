@@ -68,9 +68,9 @@ def compute_input_ref(unc: str, subdir: str) -> str:
     """
     User-visible path for the input dataset.
     Example:
-      UNC: //.../crpn$/USers/Weerasena_D
+      UNC: //.../crpn$/USers/user_dir
       subdir: sub_a/sub_b/dewmith_w
-      -> Users/Weerasena_D/sub_a/sub_b/dewmith_w
+      -> Users/user_dir/sub_a/sub_b/dewmith_w
     """
     base = _extract_users_base_from_unc(unc)
     s = (subdir or "").strip().replace("\\", "/").strip("/")
@@ -81,7 +81,7 @@ def compute_output_ref(unc: str, subdir: str) -> str:
     """
     User-visible output reference path.
     subdir: sub_a/sub_b/dewmith_w
-    -> Users/Weerasena_D/sub_a/sub_b/BIDSIFied_dewmith_w
+    -> Users/user_dir/sub_a/sub_b/BIDSIFied_dewmith_w
     """
     base = _extract_users_base_from_unc(unc)
     s = (subdir or "").strip().replace("\\", "/").strip("/")
@@ -99,7 +99,7 @@ def _extract_users_base_from_unc(unc: str) -> str:
     """
     Extract the UNC tail starting at Users (case-insensitive),
     fallback to last 2 segments.
-    Returns e.g. 'USers/Weerasena_D' (we normalize to 'Users/...')
+    Returns e.g. 'USers/user_dir' (we normalize to 'Users/...')
     """
     u = (unc or "").strip().replace("\\", "/").strip("/")
     parts = u.split("/")
@@ -193,3 +193,36 @@ def get_internal_paths(mount_id: str):
             WHERE mount_id = ?
         """, (mount_id,)).fetchone()
         return dict(row) if row else None
+
+
+def claim_next_job():
+    with get_conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute("""
+            SELECT mount_id, input_path, output_path
+            FROM mounts
+            WHERE status = 'mounted'
+            ORDER BY created_at ASC
+            LIMIT 1
+        """).fetchone()
+
+        if row is None:
+            con.execute("COMMIT")
+            return None
+
+        con.execute("""
+            UPDATE mounts SET status = 'running', error = NULL
+            WHERE mount_id = ?
+        """, (row["mount_id"],))
+        con.execute("COMMIT")
+        return dict(row)
+
+
+def set_job_status(mount_id: str, status: str, error: str | None = None):
+    with get_conn() as con:
+        con.execute("""
+            UPDATE mounts
+            SET status = ?, error = ?
+            WHERE mount_id = ?
+        """, (status, error, mount_id))
+        con.commit()

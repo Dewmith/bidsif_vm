@@ -4,6 +4,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
 import asyncio
+import subprocess
+import sys
+import configparser
 
 from main_mounting import mount_dataset
 from db import (
@@ -14,6 +17,8 @@ from db import (
     compute_output_ref,
     list_mounts,
     now_iso,
+    claim_next_job,
+    set_job_status,
 )
 
 app = FastAPI()
@@ -21,50 +26,26 @@ app = FastAPI()
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+#BIDSIF location (might have to change for reusability)
+BIDSIF_DIR = (BASE_DIR.parent / "bidsif").resolve()
+BIDSIF_SCRIPT = BIDSIF_DIR / "bidsify.py"
+BIDSIF_PYTHON = BIDSIF_DIR / ".venv_bidsif" / "bin" / "python"
 
+if not BIDSIF_PYTHON.exists():
+    raise RuntimeError(f"BIDSIF venv python not found at {BIDSIF_PYTHON}")
+if not BIDSIF_SCRIPT.exists():
+    raise RuntimeError(f"Script not found at {BIDSIF_SCRIPT}")
+
+
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ---------- MODELS ----------
 
 class SubmitRequest(BaseModel):
     unc: str
-    subdir: str = ""
+    subdir: str
     username: str
     password: str
-
-# ---------- Methods ----------
-def compute_reference_output_path(unc: str, subdir: str) -> str:
-    """
-    Returns something user-friendly like:
-      Users/Weerasena_D/sub_a/sub_b/BIDSIFied_dewmith_w
-
-    We take the UNC and extract the part starting from "Users" (case-insensitive)
-    then append the parent folders of subdir and finally BIDSIFied_<last>.
-    """
-    unc_clean = (unc or "").strip().replace("\\", "/").strip("/")
-    parts = unc_clean.split("/")
-
-    # Find "Users" segment
-    idx = None
-    for i, p in enumerate(parts):
-        if p.lower() == "users":
-            idx = i
-            break
-
-    base = "/".join(parts[idx:] if idx is not None else parts[-2:])  # fallback
-
-    sub_clean = (subdir or "").strip().replace("\\", "/").strip("/")
-    if not sub_clean:
-        return f"{base}/BIDSIFied_ROOT"
-
-    sub_parts = sub_clean.split("/")
-    parent = "/".join(sub_parts[:-1])
-    last = sub_parts[-1]
-
-    if parent:
-        return f"{base}/{parent}/BIDSIFied_{last}"
-    return f"{base}/BIDSIFied_{last}"
-
 
 # ---------- ROUTES ----------
 
@@ -72,15 +53,12 @@ def compute_reference_output_path(unc: str, subdir: str) -> str:
 def home():
     return FileResponse(str(STATIC_DIR / "index.html"))
 
-
 @app.get("/mounts")
 def get_mounts():
     return list_mounts()
 
-
 @app.post("/submit")
 async def submit(req: SubmitRequest):
-    # 1) MOUNT IMMEDIATELY
     try:
         mount_id, mountpoint, access_path = await asyncio.to_thread(
             mount_dataset,
@@ -92,7 +70,6 @@ async def submit(req: SubmitRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # 2) COMPUTE OUTPUT PATH
     output_path = compute_output_path(mountpoint, req.subdir)
     input_ref = compute_input_ref(req.unc, req.subdir)
     output_ref = compute_output_ref(req.unc, req.subdir)
@@ -102,17 +79,16 @@ async def submit(req: SubmitRequest):
         username=req.username.strip(),
         unc=req.unc.strip(),
         subdir=req.subdir.strip(),
-        input_path=access_path,      # VM path hidden from user
-        output_path=output_path,     # VM path hidden from user
-        input_ref=input_ref,         # user-visible
-        output_ref=output_ref,       # user-visible
+        input_path=access_path,
+        output_path=output_path,
+        input_ref=input_ref,
+        output_ref=output_ref,
         status="mounted"
     )
 
-    # Return ONLY user-visible fields:
     return {
         "mount_id": mount_id,
-        "created_at": now_iso(),    # optional
+        "created_at": now_iso(),
         "username": req.username.strip(),
         "subdir": req.subdir.strip(),
         "input_ref": input_ref,
@@ -120,11 +96,70 @@ async def submit(req: SubmitRequest):
         "status": "mounted"
     }
 
+# ---------- BIDSIF WORKER ----------
+
+MAX_WORKERS = 4
+
+def prepare_bids_config(job: dict) -> Path:
+    input_path = Path(job["input_path"])
+    output_path = Path(job["output_path"])
+
+    template = input_path / "bids_configurator.txt"
+    if not template.exists():
+        raise FileNotFoundError(f"bids_configurator.txt not found in {input_path}")
+
+    cfg = configparser.ConfigParser()
+    cfg.optionxform = str
+    cfg.read(template)
+
+    if "DEFAULT" not in cfg:
+        cfg["DEFAULT"] = {}
+
+    cfg["DEFAULT"]["input_path"] = str(input_path)
+    cfg["DEFAULT"]["output_path"] = str(output_path)
+
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    tmp_cfg = Path("/tmp") / f"bids_config_{job['mount_id']}.txt"
+    with open(tmp_cfg, "w") as f:
+        cfg.write(f)
+
+    return tmp_cfg
+
+def run_bidsif(config_path: Path):
+    return subprocess.run(
+        [str(BIDSIF_PYTHON), str(BIDSIF_SCRIPT), "--config", str(config_path)],
+        cwd=str(BIDSIF_DIR),
+        capture_output=True,
+        text=True
+    )
 
 
+async def bidsif_worker(worker_id: int):
+    while True:
+        job = await asyncio.to_thread(claim_next_job)
+        if job is None:
+            await asyncio.sleep(1)
+            continue
+
+        mount_id = job["mount_id"]
+        try:
+            cfg = await asyncio.to_thread(prepare_bids_config, job)
+            result = await asyncio.to_thread(run_bidsif, cfg)
+
+            if result.returncode == 0:
+                await asyncio.to_thread(set_job_status, mount_id, "success")
+            else:
+                err = (result.stderr or result.stdout or "").strip()
+                await asyncio.to_thread(set_job_status, mount_id, "failed", err[:2000])
+
+        except Exception as e:
+            await asyncio.to_thread(set_job_status, mount_id, "failed", str(e)[:2000])
 
 # ---------- STARTUP ----------
 
 @app.on_event("startup")
 async def startup():
     init_db()
+    for i in range(MAX_WORKERS):
+        asyncio.create_task(bidsif_worker(i + 1))
