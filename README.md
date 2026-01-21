@@ -30,7 +30,7 @@ For the UNC path
 
 add:
 ```bash
-//smb-crpn-isi-stj.univ-amu.fr/crpn$/USers/your_login_name
+//smb-crpn-isi-stj.univ-amu.fr/crpn$/USers/your_directory
 ``` 
 
 For subpath to dataset:
