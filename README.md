@@ -1,5 +1,21 @@
 # BIDSIF_VM
 
+## Introduction
+
+**BIDSIF_VM** is a virtual-machine–based web interface designed to simplify and standardize the conversion of neuroimaging datasets into the **BIDS (Brain Imaging Data Structure)** format.
+
+It provides a lightweight, reproducible environment where users can:
+- Configure their dataset using a simple text-based configurator
+- Launch a local web interface to connect to the web API of the Virtual Machine.
+- Add the dataset path to be BIDSified.
+- Run the BIDS conversion algorthmn within the VM and store the BIDSIFied dataset in your DCS storage.
+
+The goal of BIDSIF_VM is to lower the technical barrier to BIDS conversion by providing:
+- A preconfigured Python environment on a VM with all necessary dependencies for BIDS conversion.
+- The same environment for all users, ensuring consistency and reproducibility without worrying about local setup issues.
+
+This README walks you step by step through connecting to the VM, setting up the environment if needed, launching the API, and accessing the interface from your local machine.
+
 ## Step 1 
 
 Make sure you are successfully connected to the vm through SSH and that you are in the directory `/home/crpn
