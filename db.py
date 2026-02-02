@@ -16,7 +16,7 @@ DB_PATH = BASE_DIR / "bidsif.db"
 PARIS_TZ = ZoneInfo("Europe/Paris")
 
 def now_iso() -> str:
-    return datetime.now(PARIS_TZ).isoformat(timespec="seconds")
+    return datetime.now(PARIS_TZ).isoformat(timespec="milliseconds")
 
 
 
