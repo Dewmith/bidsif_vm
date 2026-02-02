@@ -29,7 +29,7 @@ Verify by typing in `pwd` on the terminal.
 cd /home/crpn/GITLAB/bidsif_vm
 ```
 <details>
-<summary><h2>Expand and follow the insctructions if the Vitual env is not set</h2></summary>
+<summary><h2>Expand and follow the instructions if the Vitual env is not set</h2></summary>
 
 ## Step 2.1 : Create the Virtual environment using UV
 
