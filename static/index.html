@@ -22,15 +22,14 @@
       color: var(--text);
     }
 
-    /* Center the entire interface */
+    /* Wider desktop-centered layout */
     .page {
-      max-width: 1200px;
+      max-width: 1600px;              /* <-- bigger */
       margin: 0 auto;
-      padding: 18px 16px 40px;
+      padding: 18px 18px 40px;        /* <-- slightly bigger padding */
     }
 
     h1 { margin: 0; }
-
     .muted { color: var(--muted); margin-top:6px; }
 
     .card {
@@ -43,7 +42,7 @@
     }
 
     .row { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-    @media (max-width: 820px){
+    @media (max-width: 900px){
       .row { grid-template-columns: 1fr; }
     }
 
@@ -83,7 +82,7 @@
       width:100%;
       border-collapse: collapse;
       margin-top: 10px;
-      table-layout: fixed;
+      table-layout: auto;           /* <-- let browser size columns naturally */
     }
 
     th, td {
@@ -92,6 +91,7 @@
       text-align:left;
       font-size:14px;
       vertical-align: top;
+      white-space: nowrap;          /* <-- keep columns tight */
     }
 
     th { font-size: 13px; color:#333; }
@@ -104,18 +104,19 @@
       font-size: 12px;
     }
 
-    /* Keep table scrollable horizontally if needed */
+    /* Keep table wrapper, but with the changes below it should rarely be needed */
     .table-wrap { overflow-x: auto; }
 
     /* Truncate long text but show full value on hover */
     .trunc {
-      max-width: 360px;
+      max-width: 320px;
       display: inline-block;
-      white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       vertical-align: bottom;
     }
+    .trunc.wide { max-width: 520px; }
+    .trunc.narrow { max-width: 220px; }
 
     /* Sticky status bar so you never have to scroll to see it */
     .stickybar {
@@ -128,9 +129,9 @@
     }
 
     .sticky-inner {
-      max-width: 1200px;
+      max-width: 1600px;          /* <-- match page width */
       margin: 0 auto;
-      padding: 10px 16px;
+      padding: 10px 18px;
       display:flex;
       gap:12px;
       align-items:center;
@@ -150,7 +151,7 @@
     }
 
     .pill strong { font-weight: 650; }
-    .pill .msg { white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
+    .pill .msg { overflow:hidden; text-overflow: ellipsis; }
 
     .actions { display:flex; gap:10px; align-items:center; }
   </style>
@@ -158,7 +159,6 @@
 
 <body>
 
-  <!-- Sticky status always visible -->
   <div class="stickybar">
     <div class="sticky-inner">
       <div>
@@ -215,19 +215,20 @@
 
     <div class="card">
       <h3 style="margin:0;">Process Database</h3>
-      <div class="muted">Auto-refresh every 2 seconds. Hover long fields to see the full value.</div>
+      <div class="muted">Auto-refresh every 2 seconds. Status is kept visible near the left.</div>
 
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th style="width: 200px;">created_at</th>
-              <th style="width: 120px;">username</th>
-              <th style="width: 230px;">mount_id</th>
-              <th style="width: 220px;">subdir</th>
-              <th style="width: 360px;">reference output path</th>
-              <th style="width: 110px;">status</th>
-              <th style="width: 360px;">error</th>
+              <!-- Put status early so it’s always visible -->
+              <th style="min-width: 110px;">status</th>
+              <th style="min-width: 220px;">created_at</th>
+              <th style="min-width: 120px;">username</th>
+              <th style="min-width: 240px;">mount_id</th>
+              <th style="min-width: 240px;">subdir</th>
+              <th style="min-width: 360px;">reference output path</th>
+              <th style="min-width: 360px;">error</th>
             </tr>
           </thead>
           <tbody id="rows">
@@ -247,7 +248,6 @@
     span.textContent = msg || "Idle";
     el.title = msg || "";
 
-    // Simple coloring via class
     el.style.borderColor = "#e0e0e0";
     el.style.color = "#111";
 
@@ -279,7 +279,6 @@
       .replaceAll(">","&gt;");
   }
 
-  // Only used if backend doesn't store reference output path
   function computeReferenceOutputPath(unc, subdir) {
     const u = (unc || "").trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
     const parts = u.split("/");
@@ -367,24 +366,28 @@
       rowsEl.innerHTML = rows.map(r => {
         const refOut = r.reference_output_path || r.output_ref || computeReferenceOutputPath(r.unc, r.subdir);
         const err = r.error || "";
+
+        const st = (r.status || "").toLowerCase();
+        const stClass = st === "success" ? "ok" : (st === "failed" ? "err" : "");
+
         return `
           <tr>
+            <td><span class="${stClass}">${esc(r.status)}</span></td>
             <td class="mono">${esc(r.created_at)}</td>
             <td>${esc(r.username)}</td>
-            <td class="mono"><span class="trunc" title="${esc(r.mount_id)}">${esc(r.mount_id)}</span></td>
-            <td><span class="trunc" title="${esc(r.subdir)}">${esc(r.subdir)}</span></td>
-            <td class="mono"><span class="trunc" title="${esc(refOut)}">${esc(refOut)}</span></td>
-            <td><span class="${esc(r.status)==='success' ? 'ok' : (esc(r.status)==='failed' ? 'err' : '')}">${esc(r.status)}</span></td>
-            <td class="mono"><span class="trunc" title="${esc(err)}">${esc(err)}</span></td>
+            <td class="mono"><span class="trunc wide" title="${esc(r.mount_id)}">${esc(r.mount_id)}</span></td>
+            <td><span class="trunc wide" title="${esc(r.subdir)}">${esc(r.subdir)}</span></td>
+            <td class="mono"><span class="trunc wide" title="${esc(refOut)}">${esc(refOut)}</span></td>
+            <td class="mono"><span class="trunc wide" title="${esc(err)}">${esc(err)}</span></td>
           </tr>
         `;
       }).join("");
 
-      // Update sticky status summary (quick glance)
-      const running = rows.filter(x => x.status === "running").length;
-      const queued = rows.filter(x => x.status === "queued" || x.status === "mounted").length;
-      if (running > 0) setTopStatus(null, `Running: ${running} | Waiting: ${queued}`);
-      else setTopStatus(null, `Idle | Waiting: ${queued}`);
+      const running = rows.filter(x => (x.status||"").toLowerCase() === "running").length;
+      const waiting = rows.filter(x => ["queued","mounted"].includes((x.status||"").toLowerCase())).length;
+
+      if (running > 0) setTopStatus(null, `Running: ${running} | Waiting: ${waiting}`);
+      else setTopStatus(null, `Idle | Waiting: ${waiting}`);
 
     } catch(e){
       rowsEl.innerHTML = `<tr><td colspan="7" class="err">Failed: ${esc(JSON.stringify(e.detail))}</td></tr>`;
