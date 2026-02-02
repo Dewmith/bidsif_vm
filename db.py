@@ -127,7 +127,7 @@ def insert_mount_success(
     output_path: str,
     input_ref: str,
     output_ref: str,
-    status: str = "mounted",
+    status: str = "mounted | Waiting for execution",
 ) -> None:
     with get_conn() as con:
         con.execute("""
@@ -189,6 +189,15 @@ def get_internal_paths(mount_id: str):
     with get_conn() as con:
         row = con.execute("""
             SELECT input_path, output_path
+            FROM mounts
+            WHERE mount_id = ?
+        """, (mount_id,)).fetchone()
+        return dict(row) if row else None
+
+def get_mount_internal(mount_id: str):
+    with get_conn() as con:
+        row = con.execute("""
+            SELECT mount_id, input_path
             FROM mounts
             WHERE mount_id = ?
         """, (mount_id,)).fetchone()

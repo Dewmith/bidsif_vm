@@ -7,8 +7,9 @@ import asyncio
 import subprocess
 import sys
 import configparser
+import os
 
-from main_mounting import mount_dataset
+from main_mounting import mount_dataset, unmount_and_cleanup
 from db import (
     init_db,
     insert_mount_success,
@@ -93,12 +94,12 @@ async def submit(req: SubmitRequest):
         "subdir": req.subdir.strip(),
         "input_ref": input_ref,
         "output_ref": output_ref,
-        "status": "mounted"
+        "status": "mounted and waiting for BIDSIF processing"
     }
 
 # ---------- BIDSIF WORKER ----------
-
-MAX_WORKERS = 4
+#extract total cpus and set max workers accordingly
+MAX_WORKERS = os.cpu_count() or 1
 
 def prepare_bids_config(job: dict) -> Path:
     input_path = Path(job["input_path"])
@@ -134,6 +135,28 @@ def run_bidsif(config_path: Path):
         text=True
     )
 
+def mountpoint_from_input_path(input_path: str, mount_id: str) -> str:
+    """
+    input_path example:
+      /home/crpn/mnt/cifs_<mount_id>/sub_a/sub_b/dataset
+    mountpoint should be:
+      /home/crpn/mnt/cifs_<mount_id>
+    """
+    # safest: build it directly from known convention
+    return f"/home/crpn/mnt/cifs_{mount_id}"
+
+def cleanup_job_artifacts(mount_id: str, input_path: str):
+    # 1) delete temp config
+    tmp_cfg = Path("/tmp") / f"bids_config_{mount_id}.txt"
+    try:
+        tmp_cfg.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    # 2) unmount and delete folder
+    mountpoint = mountpoint_from_input_path(input_path, mount_id)
+    unmount_and_cleanup(mountpoint)
+
 
 async def bidsif_worker(worker_id: int):
     while True:
@@ -143,18 +166,38 @@ async def bidsif_worker(worker_id: int):
             continue
 
         mount_id = job["mount_id"]
+        input_path = job["input_path"]
+
         try:
             cfg = await asyncio.to_thread(prepare_bids_config, job)
             result = await asyncio.to_thread(run_bidsif, cfg)
 
-            if result.returncode == 0:
-                await asyncio.to_thread(set_job_status, mount_id, "success")
+            # Safety check: output exists
+            expected = Path(job["output_path"]) / "participants.tsv"
+            if result.returncode == 0 and expected.exists():
+                await asyncio.to_thread(set_job_status, mount_id, "success", None)
             else:
                 err = (result.stderr or result.stdout or "").strip()
+                if not err and not expected.exists():
+                    err = f"Output missing: {expected}"
                 await asyncio.to_thread(set_job_status, mount_id, "failed", err[:2000])
 
         except Exception as e:
             await asyncio.to_thread(set_job_status, mount_id, "failed", str(e)[:2000])
+
+        finally:
+            # Always cleanup mount and temp config (success or fail)
+            try:
+                await asyncio.to_thread(cleanup_job_artifacts, mount_id, input_path)
+            except Exception as e:
+                # Don't crash the worker; record cleanup error (optional)
+                await asyncio.to_thread(
+                    set_job_status,
+                    mount_id,
+                    "failed",
+                    f"Cleanup error: {e}"[:2000]
+                )
+
 
 # ---------- STARTUP ----------
 
