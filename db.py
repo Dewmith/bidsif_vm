@@ -235,3 +235,21 @@ def set_job_status(mount_id: str, status: str, error: str | None = None):
             WHERE mount_id = ?
         """, (status, error, mount_id))
         con.commit()
+
+def append_error(mount_id: str, msg: str) -> None:
+    """Append message to existing error without overwriting."""
+    msg = (msg or "").strip()
+    if not msg:
+        return
+
+    with get_conn() as con:
+        row = con.execute("SELECT error FROM mounts WHERE mount_id = ?", (mount_id,)).fetchone()
+        prev = (row["error"] if row else "") or ""
+        combined = (prev + "\n" + msg).strip() if prev else msg
+
+        con.execute("""
+            UPDATE mounts
+            SET error = ?
+            WHERE mount_id = ?
+        """, (combined[:4000], mount_id))  # cap length so UI/db stays sane
+        con.commit()

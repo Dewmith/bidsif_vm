@@ -20,6 +20,7 @@ from db import (
     now_iso,
     claim_next_job,
     set_job_status,
+    append_error
 )
 
 app = FastAPI()
@@ -107,7 +108,8 @@ def prepare_bids_config(job: dict) -> Path:
 
     template = input_path / "bids_configurator.txt"
     if not template.exists():
-        raise FileNotFoundError(f"bids_configurator.txt not found in {input_path}")
+        raise FileNotFoundError(f"Missing config file: {template}")
+
 
     cfg = configparser.ConfigParser()
     cfg.optionxform = str
@@ -177,10 +179,17 @@ async def bidsif_worker(worker_id: int):
             if result.returncode == 0 and expected.exists():
                 await asyncio.to_thread(set_job_status, mount_id, "success", None)
             else:
-                err = (result.stderr or result.stdout or "").strip()
-                if not err and not expected.exists():
-                    err = f"Output missing: {expected}"
+                stderr = (result.stderr or "").strip()
+                stdout = (result.stdout or "").strip()
+
+                err = f"BIDSIF exited with code {result.returncode}."
+                if stderr:
+                    err += f"\n--- STDERR ---\n{stderr}"
+                if stdout:
+                    err += f"\n--- STDOUT ---\n{stdout}"
+
                 await asyncio.to_thread(set_job_status, mount_id, "failed", err[:2000])
+
 
         except Exception as e:
             await asyncio.to_thread(set_job_status, mount_id, "failed", str(e)[:2000])
@@ -190,13 +199,9 @@ async def bidsif_worker(worker_id: int):
             try:
                 await asyncio.to_thread(cleanup_job_artifacts, mount_id, input_path)
             except Exception as e:
-                # Don't crash the worker; record cleanup error (optional)
-                await asyncio.to_thread(
-                    set_job_status,
-                    mount_id,
-                    "failed",
-                    f"Cleanup error: {e}"[:2000]
-                )
+                # Keep the existing status/error. Just append cleanup info.
+                await asyncio.to_thread(append_error, mount_id, f"Cleanup error: {e}")
+
 
 
 # ---------- STARTUP ----------

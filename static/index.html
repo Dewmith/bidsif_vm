@@ -5,99 +5,261 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>BIDSIF Console</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 1400px; margin: 24px; }
-    h1 { margin: 0; }
-    .muted { color:#666; margin-top:6px; }
-    .card { border:1px solid #ddd; border-radius:12px; padding:14px; margin-top:16px; }
-    .row { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
-    label { font-size: 12px; color:#444; display:block; margin-top:10px; }
-    input { width:100%; padding:10px; border:1px solid #ccc; border-radius:10px; margin-top:4px; }
-    button { padding:10px 14px; border:1px solid #222; border-radius:10px; background:#111; color:#fff; cursor:pointer; }
-    button.secondary { background:#fff; color:#111; }
-    pre { background:#111; color:#eee; padding:12px; border-radius:10px; overflow:auto; max-height: 340px; }
-    table { width:100%; border-collapse: collapse; margin-top: 10px; table-layout: fixed; }
-    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align:left; font-size:14px; vertical-align: top; }
-    th { font-size: 13px; color:#333; }
-    .err { color:#b00020; font-weight:600; }
-    .ok { color:#0a7a2f; font-weight:600; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    :root{
+      --bg:#fafafa;
+      --card:#fff;
+      --border:#ddd;
+      --muted:#666;
+      --text:#111;
+      --ok:#0a7a2f;
+      --err:#b00020;
+    }
 
-    /* Table wrapper makes it horizontally scrollable if needed */
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    /* Center the entire interface */
+    .page {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 18px 16px 40px;
+    }
+
+    h1 { margin: 0; }
+
+    .muted { color: var(--muted); margin-top:6px; }
+
+    .card {
+      background: var(--card);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:14px;
+      margin-top:16px;
+      box-shadow: 0 1px 0 rgba(0,0,0,0.03);
+    }
+
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    @media (max-width: 820px){
+      .row { grid-template-columns: 1fr; }
+    }
+
+    label { font-size: 12px; color:#444; display:block; margin-top:10px; }
+
+    input {
+      width:100%;
+      padding:10px;
+      border:1px solid #ccc;
+      border-radius:10px;
+      margin-top:4px;
+      box-sizing: border-box;
+      background:#fff;
+    }
+
+    button {
+      padding:10px 14px;
+      border:1px solid #222;
+      border-radius:10px;
+      background:#111;
+      color:#fff;
+      cursor:pointer;
+    }
+    button.secondary { background:#fff; color:#111; border-color:#bbb; }
+
+    pre {
+      background:#111;
+      color:#eee;
+      padding:12px;
+      border-radius:10px;
+      overflow:auto;
+      max-height: 280px;
+      margin: 10px 0 0;
+    }
+
+    table {
+      width:100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      table-layout: fixed;
+    }
+
+    th, td {
+      border-bottom: 1px solid #eee;
+      padding: 8px;
+      text-align:left;
+      font-size:14px;
+      vertical-align: top;
+    }
+
+    th { font-size: 13px; color:#333; }
+
+    .err { color: var(--err); font-weight:600; }
+    .ok { color: var(--ok); font-weight:600; }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+
+    /* Keep table scrollable horizontally if needed */
     .table-wrap { overflow-x: auto; }
 
-    /* Truncate long text but show full value on hover (via title attr) */
+    /* Truncate long text but show full value on hover */
     .trunc {
-      max-width: 520px;
+      max-width: 360px;
       display: inline-block;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       vertical-align: bottom;
     }
+
+    /* Sticky status bar so you never have to scroll to see it */
+    .stickybar {
+      position: sticky;
+      top: 0;
+      z-index: 999;
+      background: rgba(250,250,250,0.92);
+      backdrop-filter: blur(6px);
+      border-bottom: 1px solid #e8e8e8;
+    }
+
+    .sticky-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 10px 16px;
+      display:flex;
+      gap:12px;
+      align-items:center;
+      justify-content: space-between;
+    }
+
+    .pill {
+      display:inline-flex;
+      gap:8px;
+      align-items:center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid #e0e0e0;
+      background: #fff;
+      font-size: 13px;
+      max-width: 70%;
+    }
+
+    .pill strong { font-weight: 650; }
+    .pill .msg { white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
+
+    .actions { display:flex; gap:10px; align-items:center; }
   </style>
 </head>
 
 <body>
-  <h1>BIDSIF Console</h1>
-  <div class="card">
-    <h3>Submit mount</h3>
 
-    <div class="row">
+  <!-- Sticky status always visible -->
+  <div class="stickybar">
+    <div class="sticky-inner">
       <div>
-        <label>UNC path</label>
-        <input id="unc" placeholder='//smb-crpn-isi-stj.univ-amu.fr/crpn$/USers/user_dir' />
+        <strong>BIDSIF Console</strong>
+        <span class="muted" style="margin-left:8px;">VM mount + FIFO bidsify</span>
       </div>
-      <div>
-        <label>Sub path to dataset</label>
-        <input id="subdir" placeholder='sub_a/sub_b/dataset_name' />
-      </div>
-    </div>
 
-    <div class="row">
-      <div>
-        <label>Username</label>
-        <input id="username" placeholder="user.name" />
-      </div>
-      <div>
-        <label>Password</label>
-        <input id="password" type="password" placeholder="(not stored)" />
+      <div class="actions">
+        <div id="topStatus" class="pill" title="">
+          <strong>Status:</strong>
+          <span class="msg">Idle</span>
+        </div>
+        <button class="secondary" onclick="refreshMounts()">Refresh</button>
       </div>
     </div>
-
-    <div style="display:flex; gap:10px; align-items:center; margin-top:12px;">
-      <button onclick="submitMount()">Submit</button>
-      <button class="secondary" onclick="clearFields()">Clear</button>
-      <span id="status" class="muted"></span>
-    </div>
-
-    <h4 style="margin-top:14px; margin-bottom:8px;">Response</h4>
-    <pre id="out">{}</pre>
   </div>
 
-  <div class="card">
-    <h3>Process Database</h3>
-    <div class="muted">Auto-refresh every 2 seconds. Hover long fields to see the full value.</div>
+  <div class="page">
 
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th style="width: 240px;">created_at</th>
-            <th style="width: 140px;">username</th>
-            <th style="width: 280px;">mount_id</th>
-            <th style="width: 220px;">subdir</th>
-            <th style="width: 520px;">reference output path</th>
-            <th style="width: 110px;">status</th>
-          </tr>
-        </thead>
-        <tbody id="rows">
-          <tr><td colspan="6" class="muted">Loading…</td></tr>
-        </tbody>
-      </table>
+    <div class="card">
+      <h3 style="margin:0;">Submit mount</h3>
+
+      <div class="row">
+        <div>
+          <label>UNC path</label>
+          <input id="unc" placeholder='//smb-crpn-isi-stj.univ-amu.fr/crpn$/USers/user_dir' />
+        </div>
+        <div>
+          <label>Sub path to dataset (required)</label>
+          <input id="subdir" placeholder='sub_a/sub_b/dataset_name' required />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Username</label>
+          <input id="username" placeholder="user.name" />
+        </div>
+        <div>
+          <label>Password</label>
+          <input id="password" type="password" placeholder="(not stored)" />
+        </div>
+      </div>
+
+      <div style="display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap: wrap;">
+        <button onclick="submitMount()">Submit</button>
+        <button class="secondary" onclick="clearFields()">Clear</button>
+        <span id="status" class="muted"></span>
+      </div>
+
+      <h4 style="margin-top:14px; margin-bottom:8px;">Response</h4>
+      <pre id="out">{}</pre>
     </div>
+
+    <div class="card">
+      <h3 style="margin:0;">Process Database</h3>
+      <div class="muted">Auto-refresh every 2 seconds. Hover long fields to see the full value.</div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 200px;">created_at</th>
+              <th style="width: 120px;">username</th>
+              <th style="width: 230px;">mount_id</th>
+              <th style="width: 220px;">subdir</th>
+              <th style="width: 360px;">reference output path</th>
+              <th style="width: 110px;">status</th>
+              <th style="width: 360px;">error</th>
+            </tr>
+          </thead>
+          <tbody id="rows">
+            <tr><td colspan="7" class="muted">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
   </div>
 
 <script>
+  function setTopStatus(kind, msg){
+    const el = document.getElementById("topStatus");
+    const span = el.querySelector(".msg");
+
+    span.textContent = msg || "Idle";
+    el.title = msg || "";
+
+    // Simple coloring via class
+    el.style.borderColor = "#e0e0e0";
+    el.style.color = "#111";
+
+    if (kind === "ok"){
+      el.style.borderColor = "#bfe9cb";
+      el.style.color = "#0a7a2f";
+    } else if (kind === "err"){
+      el.style.borderColor = "#f2b8b8";
+      el.style.color = "#b00020";
+    }
+  }
+
   async function api(path, opts={}) {
     const res = await fetch(path, {
       headers: {"Content-Type":"application/json"},
@@ -117,7 +279,7 @@
       .replaceAll(">","&gt;");
   }
 
-  // If the backend doesn't store reference_output_path in DB, we compute it here.
+  // Only used if backend doesn't store reference output path
   function computeReferenceOutputPath(unc, subdir) {
     const u = (unc || "").trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
     const parts = u.split("/");
@@ -145,6 +307,7 @@
 
     document.getElementById("status").textContent = "";
     document.getElementById("out").textContent = "{}";
+    setTopStatus(null, "Idle");
   }
 
   async function submitMount(){
@@ -152,6 +315,7 @@
     const out = document.getElementById("out");
     status.textContent = "Submitting…";
     out.textContent = "";
+    setTopStatus(null, "Submitting…");
 
     const payload = {
       unc: document.getElementById("unc").value.trim(),
@@ -160,20 +324,20 @@
       password: document.getElementById("password").value
     };
 
-    // If absolutely nothing is entered
-    const nothingEntered =
-      !payload.unc && !payload.subdir && !payload.username && !payload.password;
-
+    const nothingEntered = !payload.unc && !payload.subdir && !payload.username && !payload.password;
     if (nothingEntered) {
-      status.innerHTML = '<span class="err">Enter data before submission.</span>';
-      out.textContent = "Enter data before submission.";
+      const msg = "Enter data before submission.";
+      status.innerHTML = `<span class="err">${esc(msg)}</span>`;
+      out.textContent = msg;
+      setTopStatus("err", msg);
       return;
     }
 
-    // Keep your rule: subdir is required
     if (!payload.subdir) {
-      status.innerHTML = '<span class="err">Subdirectory is required.</span>';
+      const msg = "Subdirectory is required.";
+      status.innerHTML = `<span class="err">${esc(msg)}</span>`;
       out.textContent = "Please enter a subdirectory (e.g. sub_a/sub_b/dataset_name).";
+      setTopStatus("err", msg);
       return;
     }
 
@@ -182,10 +346,12 @@
       status.innerHTML = '<span class="ok">OK</span>';
       out.textContent = JSON.stringify(data, null, 2);
       document.getElementById("password").value = "";
+      setTopStatus("ok", "Submitted. Mount created and queued.");
       await refreshMounts();
     } catch(e){
       status.innerHTML = `<span class="err">Error (${e.status})</span>`;
       out.textContent = JSON.stringify(e.detail, null, 2);
+      setTopStatus("err", `Submit failed (${e.status})`);
     }
   }
 
@@ -194,12 +360,13 @@
     try{
       const rows = await api("/mounts");
       if (!rows || rows.length === 0){
-        rowsEl.innerHTML = `<tr><td colspan="6" class="muted">No rows yet.</td></tr>`;
+        rowsEl.innerHTML = `<tr><td colspan="7" class="muted">No rows yet.</td></tr>`;
         return;
       }
 
       rowsEl.innerHTML = rows.map(r => {
-        const refOut = r.reference_output_path || computeReferenceOutputPath(r.unc, r.subdir);
+        const refOut = r.reference_output_path || r.output_ref || computeReferenceOutputPath(r.unc, r.subdir);
+        const err = r.error || "";
         return `
           <tr>
             <td class="mono">${esc(r.created_at)}</td>
@@ -207,12 +374,21 @@
             <td class="mono"><span class="trunc" title="${esc(r.mount_id)}">${esc(r.mount_id)}</span></td>
             <td><span class="trunc" title="${esc(r.subdir)}">${esc(r.subdir)}</span></td>
             <td class="mono"><span class="trunc" title="${esc(refOut)}">${esc(refOut)}</span></td>
-            <td>${esc(r.status)}</td>
+            <td><span class="${esc(r.status)==='success' ? 'ok' : (esc(r.status)==='failed' ? 'err' : '')}">${esc(r.status)}</span></td>
+            <td class="mono"><span class="trunc" title="${esc(err)}">${esc(err)}</span></td>
           </tr>
         `;
       }).join("");
+
+      // Update sticky status summary (quick glance)
+      const running = rows.filter(x => x.status === "running").length;
+      const queued = rows.filter(x => x.status === "queued" || x.status === "mounted").length;
+      if (running > 0) setTopStatus(null, `Running: ${running} | Waiting: ${queued}`);
+      else setTopStatus(null, `Idle | Waiting: ${queued}`);
+
     } catch(e){
-      rowsEl.innerHTML = `<tr><td colspan="6" class="err">Failed: ${esc(JSON.stringify(e.detail))}</td></tr>`;
+      rowsEl.innerHTML = `<tr><td colspan="7" class="err">Failed: ${esc(JSON.stringify(e.detail))}</td></tr>`;
+      setTopStatus("err", "Failed to refresh /mounts");
     }
   }
 
