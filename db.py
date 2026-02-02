@@ -127,7 +127,7 @@ def insert_mount_success(
     output_path: str,
     input_ref: str,
     output_ref: str,
-    status: str = "mounted and awaiting execution",
+    status: str = "queued",
 ) -> None:
     with get_conn() as con:
         con.execute("""
@@ -210,7 +210,7 @@ def claim_next_job():
         row = con.execute("""
             SELECT mount_id, input_path, output_path
             FROM mounts
-            WHERE status = 'mounted and awaiting execution'
+            WHERE status = 'queued'
             ORDER BY created_at ASC
             LIMIT 1
         """).fetchone()
