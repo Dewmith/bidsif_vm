@@ -6,13 +6,18 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
+
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "bidsif.db"
 
 
+PARIS_TZ = ZoneInfo("Europe/Paris")
+
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(PARIS_TZ).isoformat(timespec="seconds")
+
 
 
 def get_conn() -> sqlite3.Connection:
