@@ -22,11 +22,10 @@
       color: var(--text);
     }
 
-    /* Wider desktop-centered layout */
     .page {
-      max-width: 1600px;              /* <-- bigger */
+      max-width: 1600px;
       margin: 0 auto;
-      padding: 18px 18px 40px;        /* <-- slightly bigger padding */
+      padding: 18px 18px 40px;
     }
 
     h1 { margin: 0; }
@@ -82,7 +81,7 @@
       width:100%;
       border-collapse: collapse;
       margin-top: 10px;
-      table-layout: auto;           /* <-- let browser size columns naturally */
+      table-layout: auto;
     }
 
     th, td {
@@ -91,7 +90,7 @@
       text-align:left;
       font-size:14px;
       vertical-align: top;
-      white-space: nowrap;          /* <-- keep columns tight */
+      white-space: nowrap;
     }
 
     th { font-size: 13px; color:#333; }
@@ -104,10 +103,8 @@
       font-size: 12px;
     }
 
-    /* Keep table wrapper, but with the changes below it should rarely be needed */
     .table-wrap { overflow-x: auto; }
 
-    /* Truncate long text but show full value on hover */
     .trunc {
       max-width: 320px;
       display: inline-block;
@@ -118,7 +115,6 @@
     .trunc.wide { max-width: 520px; }
     .trunc.narrow { max-width: 220px; }
 
-    /* Sticky status bar so you never have to scroll to see it */
     .stickybar {
       position: sticky;
       top: 0;
@@ -129,7 +125,7 @@
     }
 
     .sticky-inner {
-      max-width: 1600px;          /* <-- match page width */
+      max-width: 1600px;
       margin: 0 auto;
       padding: 10px 18px;
       display:flex;
@@ -214,14 +210,21 @@
     </div>
 
     <div class="card">
-      <h3 style="margin:0;">Process Database</h3>
-      <div class="muted">Auto-refresh every 2 seconds.</div>
+      <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <div>
+          <h3 style="margin:0;">Process Database</h3>
+          <div class="muted">Auto-refresh every 2 seconds. Search by username or mount_id.</div>
+        </div>
+        <div style="min-width:320px; flex: 1; max-width:520px;">
+          <label style="margin-top:0;">Search</label>
+          <input id="search" placeholder="Type username or mount_id…" oninput="applyFilter()" />
+        </div>
+      </div>
 
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <!-- Put status early so it’s always visible -->
               <th style="min-width: 110px;">status</th>
               <th style="min-width: 220px;">created_at</th>
               <th style="min-width: 120px;">username</th>
@@ -241,6 +244,8 @@
   </div>
 
 <script>
+  let ALL_ROWS = [];
+
   function setTopStatus(kind, msg){
     const el = document.getElementById("topStatus");
     const span = el.querySelector(".msg");
@@ -354,37 +359,57 @@
     }
   }
 
+  function renderRows(query){
+    const rowsEl = document.getElementById("rows");
+    const q = (query || "").toLowerCase().trim();
+
+    const filtered = !q ? ALL_ROWS : ALL_ROWS.filter(r => {
+      const username = (r.username || "").toLowerCase();
+      const mountId  = (r.mount_id || "").toLowerCase();
+      return username.includes(q) || mountId.includes(q);
+    });
+
+    if (!filtered || filtered.length === 0){
+      rowsEl.innerHTML = `<tr><td colspan="7" class="muted">No matches.</td></tr>`;
+      return;
+    }
+
+    rowsEl.innerHTML = filtered.map(r => {
+      const refOut = r.reference_output_path || r.output_ref || computeReferenceOutputPath(r.unc, r.subdir);
+      const err = r.error || "";
+
+      const st = (r.status || "").toLowerCase();
+      const stClass = st === "success" ? "ok" : (st === "failed" ? "err" : "");
+
+      return `
+        <tr>
+          <td><span class="${stClass}">${esc(r.status)}</span></td>
+          <td class="mono">${esc(r.created_at)}</td>
+          <td>${esc(r.username)}</td>
+          <td class="mono"><span class="trunc wide" title="${esc(r.mount_id)}">${esc(r.mount_id)}</span></td>
+          <td><span class="trunc wide" title="${esc(r.subdir)}">${esc(r.subdir)}</span></td>
+          <td class="mono"><span class="trunc wide" title="${esc(refOut)}">${esc(refOut)}</span></td>
+          <td class="mono"><span class="trunc wide" title="${esc(err)}">${esc(err)}</span></td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  function applyFilter(){
+    const q = (document.getElementById("search")?.value || "").toLowerCase().trim();
+    renderRows(q);
+  }
+
   async function refreshMounts(){
     const rowsEl = document.getElementById("rows");
     try{
       const rows = await api("/mounts");
-      if (!rows || rows.length === 0){
-        rowsEl.innerHTML = `<tr><td colspan="7" class="muted">No rows yet.</td></tr>`;
-        return;
-      }
+      ALL_ROWS = rows || [];
 
-      rowsEl.innerHTML = rows.map(r => {
-        const refOut = r.reference_output_path || r.output_ref || computeReferenceOutputPath(r.unc, r.subdir);
-        const err = r.error || "";
+      applyFilter(); // render with whatever search text is in the box
 
-        const st = (r.status || "").toLowerCase();
-        const stClass = st === "success" ? "ok" : (st === "failed" ? "err" : "");
-
-        return `
-          <tr>
-            <td><span class="${stClass}">${esc(r.status)}</span></td>
-            <td class="mono">${esc(r.created_at)}</td>
-            <td>${esc(r.username)}</td>
-            <td class="mono"><span class="trunc wide" title="${esc(r.mount_id)}">${esc(r.mount_id)}</span></td>
-            <td><span class="trunc wide" title="${esc(r.subdir)}">${esc(r.subdir)}</span></td>
-            <td class="mono"><span class="trunc wide" title="${esc(refOut)}">${esc(refOut)}</span></td>
-            <td class="mono"><span class="trunc wide" title="${esc(err)}">${esc(err)}</span></td>
-          </tr>
-        `;
-      }).join("");
-
-      const running = rows.filter(x => (x.status||"").toLowerCase() === "running").length;
-      const waiting = rows.filter(x => ["queued","mounted"].includes((x.status||"").toLowerCase())).length;
+      const running = ALL_ROWS.filter(x => (x.status||"").toLowerCase() === "running").length;
+      const waiting = ALL_ROWS.filter(x => (x.status||"").toLowerCase() === "queued").length;
 
       if (running > 0) setTopStatus(null, `Running: ${running} | Waiting: ${waiting}`);
       else setTopStatus(null, `Idle | Waiting: ${waiting}`);
