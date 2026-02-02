@@ -84,7 +84,7 @@ async def submit(req: SubmitRequest):
         output_path=output_path,
         input_ref=input_ref,
         output_ref=output_ref,
-        status="mounted"
+        status="mounted and awaiting execution"
     )
 
     return {
@@ -94,7 +94,7 @@ async def submit(req: SubmitRequest):
         "subdir": req.subdir.strip(),
         "input_ref": input_ref,
         "output_ref": output_ref,
-        "status": "mounted and waiting for BIDSIF processing"
+        "status": "mounted and awaiting execution",
     }
 
 # ---------- BIDSIF WORKER ----------

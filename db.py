@@ -50,8 +50,8 @@ def init_db() -> None:
 
 def compute_output_path(mountpoint: str, subdir: str) -> str:
     """
-    subdir: sub_a/sub_b/dewmith_w
-    output: mountpoint/sub_a/sub_b/BIDSIFied_dewmith_w
+    subdir: sub_a/sub_b/dataset
+    output: mountpoint/sub_a/sub_b/BIDSIFied_dataset
     """
     clean = (subdir or "").strip().replace("\\", "/").strip("/")
     if not clean:
@@ -69,8 +69,8 @@ def compute_input_ref(unc: str, subdir: str) -> str:
     User-visible path for the input dataset.
     Example:
       UNC: //.../crpn$/USers/user_dir
-      subdir: sub_a/sub_b/dewmith_w
-      -> Users/user_dir/sub_a/sub_b/dewmith_w
+      subdir: sub_a/sub_b/dataset
+      -> Users/user_dir/sub_a/sub_b/dataset
     """
     base = _extract_users_base_from_unc(unc)
     s = (subdir or "").strip().replace("\\", "/").strip("/")
@@ -80,8 +80,8 @@ def compute_input_ref(unc: str, subdir: str) -> str:
 def compute_output_ref(unc: str, subdir: str) -> str:
     """
     User-visible output reference path.
-    subdir: sub_a/sub_b/dewmith_w
-    -> Users/user_dir/sub_a/sub_b/BIDSIFied_dewmith_w
+    subdir: sub_a/sub_b/dataset
+    -> Users/user_dir/sub_a/sub_b/BIDSIFied_dataset
     """
     base = _extract_users_base_from_unc(unc)
     s = (subdir or "").strip().replace("\\", "/").strip("/")
@@ -127,7 +127,7 @@ def insert_mount_success(
     output_path: str,
     input_ref: str,
     output_ref: str,
-    status: str = "mounted | Waiting for execution",
+    status: str = "mounted and awaiting execution",
 ) -> None:
     with get_conn() as con:
         con.execute("""
@@ -210,7 +210,7 @@ def claim_next_job():
         row = con.execute("""
             SELECT mount_id, input_path, output_path
             FROM mounts
-            WHERE status = 'mounted'
+            WHERE status = 'mounted and awaiting execution'
             ORDER BY created_at ASC
             LIMIT 1
         """).fetchone()
