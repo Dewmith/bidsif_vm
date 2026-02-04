@@ -9,6 +9,20 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 
+# -----------------------------------------------------------------------------
+# SQLite database layer for the VM project
+#
+# Purpose:
+# - Store mount “jobs” submitted by users (UNC + credentials result -> internal VM paths)
+# - Track job status (queued/running/success/failed) and error messages
+# - Provide a simple queue mechanism using SQLite transactions ("claim_next_job")
+#
+# IMPORTANT DESIGN:
+# - The API should only return "user-friendly" paths (input_ref/output_ref)
+# - The actual VM paths (input_path/output_path) remain hidden from the user
+# -----------------------------------------------------------------------------
+
+
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "bidsif.db"
 
@@ -16,17 +30,31 @@ DB_PATH = BASE_DIR / "bidsif.db"
 PARIS_TZ = ZoneInfo("Europe/Paris")
 
 def now_iso() -> str:
+    """
+    Return "now" as an ISO-8601 timestamp with millisecond precision,
+    using Europe/Paris timezone.
+    """
     return datetime.now(PARIS_TZ).isoformat(timespec="milliseconds")
 
 
 
 def get_conn() -> sqlite3.Connection:
+    """
+    Open a SQLite connection to bidsif.db.
+
+    row_factory=sqlite3.Row lets us access columns by name (row["status"])
+    and makes conversion to dict easier.
+    """
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     return con
 
 
 def init_db() -> None:
+    """
+    Create the mounts table and useful indexes (if not already created).
+    This is run once at API startup.
+    """
     with get_conn() as con:
         con.execute("""
             CREATE TABLE IF NOT EXISTS mounts (
@@ -55,8 +83,15 @@ def init_db() -> None:
 
 def compute_output_path(mountpoint: str, subdir: str) -> str:
     """
-    subdir: sub_a/sub_b/dataset
-    output: mountpoint/sub_a/sub_b/BIDSIFied_dataset
+    Compute the INTERNAL output folder path on the VM.
+
+    Example:
+      subdir: sub_a/sub_b/dataset
+      mountpoint: /home/crpn/mnt/cifs_<id>
+      output: /home/crpn/mnt/cifs_<id>/sub_a/sub_b/BIDSIFied_dataset
+
+    If subdir is empty:
+      output: mountpoint/BIDSIFied_ROOT
     """
     clean = (subdir or "").strip().replace("\\", "/").strip("/")
     if not clean:
@@ -71,7 +106,12 @@ def compute_output_path(mountpoint: str, subdir: str) -> str:
 
 def compute_input_ref(unc: str, subdir: str) -> str:
     """
-    User-visible path for the input dataset.
+    Compute a USER-VISIBLE “reference path” for the input dataset.
+
+    The goal is:
+    - Do NOT expose /home/crpn/mnt/... VM internals
+    - Show something that resembles the user’s share structure
+
     Example:
       UNC: //.../crpn$/USers/user_dir
       subdir: sub_a/sub_b/dataset
@@ -84,9 +124,14 @@ def compute_input_ref(unc: str, subdir: str) -> str:
 
 def compute_output_ref(unc: str, subdir: str) -> str:
     """
-    User-visible output reference path.
-    subdir: sub_a/sub_b/dataset
-    -> Users/user_dir/sub_a/sub_b/BIDSIFied_dataset
+    USER-VISIBLE “reference path” for the output folder.
+
+    Example:
+      subdir: sub_a/sub_b/dataset
+      -> Users/user_dir/sub_a/sub_b/BIDSIFied_dataset
+
+    If subdir is empty:
+      -> Users/user_dir/BIDSIFied_ROOT
     """
     base = _extract_users_base_from_unc(unc)
     s = (subdir or "").strip().replace("\\", "/").strip("/")
@@ -102,9 +147,15 @@ def compute_output_ref(unc: str, subdir: str) -> str:
 
 def _extract_users_base_from_unc(unc: str) -> str:
     """
-    Extract the UNC tail starting at Users (case-insensitive),
-    fallback to last 2 segments.
-    Returns e.g. 'USers/user_dir' (we normalize to 'Users/...')
+    Extract the "tail" of the UNC starting at "Users" (case-insensitive).
+    If "Users" isn't found, fallback to last 2 segments.
+
+    This is a best-effort way to produce a friendly path like:
+      Users/<username>/<something>
+
+    Example:
+      unc = //server/share/crpn$/USers/norma
+      -> Users/norma
     """
     u = (unc or "").strip().replace("\\", "/").strip("/")
     parts = u.split("/")
@@ -134,6 +185,12 @@ def insert_mount_success(
     output_ref: str,
     status: str = "queued",
 ) -> None:
+    """
+    Insert a new mount job into the DB.
+    Typically called after mount succeeds in /submit.
+
+    Default status is "queued" because the worker will pick it up later.
+    """
     with get_conn() as con:
         con.execute("""
             INSERT INTO mounts (
@@ -160,6 +217,9 @@ def insert_mount_success(
 
 
 def update_mount_status(mount_id: str, status: str, error: Optional[str] = None) -> None:
+    """
+    Update job status (and optionally error) for a given mount_id.
+    """
     with get_conn() as con:
         con.execute("""
             UPDATE mounts
@@ -171,8 +231,10 @@ def update_mount_status(mount_id: str, status: str, error: Optional[str] = None)
 
 def list_mounts(limit: int = 50):
     """
-    IMPORTANT: This returns ONLY user-visible fields.
-    No VM paths in the API output.
+    Return recent jobs for the UI.
+
+    IMPORTANT: Returns ONLY user-visible fields.
+    We intentionally do not return internal VM paths.
     """
     with get_conn() as con:
         rows = con.execute("""
@@ -200,6 +262,10 @@ def get_internal_paths(mount_id: str):
         return dict(row) if row else None
 
 def get_mount_internal(mount_id: str):
+    """
+    Small helper: fetch mount_id + input_path for a job.
+    Looks unused in main.py right now but can be useful for debugging.
+    """
     with get_conn() as con:
         row = con.execute("""
             SELECT mount_id, input_path
@@ -209,7 +275,26 @@ def get_mount_internal(mount_id: str):
         return dict(row) if row else None
 
 
+
+# -----------------------------------------------------------------------------
+# Queue mechanism (critical for concurrency!)
+# -----------------------------------------------------------------------------
+
+
 def claim_next_job():
+    """
+    Atomically claim the next queued job.
+
+    How queueing works:
+    - Start "BEGIN IMMEDIATE" transaction: SQLite acquires a RESERVED lock,
+      preventing other writers from modifying queued rows simultaneously.
+    - Select the oldest queued job.
+    - Immediately update it to status='running'
+    - Commit
+
+    Result: Even if multiple workers call this at the same time,
+    only ONE will successfully claim a given job.
+    """
     with get_conn() as con:
         con.execute("BEGIN IMMEDIATE")
         row = con.execute("""
@@ -233,6 +318,9 @@ def claim_next_job():
 
 
 def set_job_status(mount_id: str, status: str, error: str | None = None):
+    """
+    Worker status update (success/failed).
+    """
     with get_conn() as con:
         con.execute("""
             UPDATE mounts
@@ -242,7 +330,14 @@ def set_job_status(mount_id: str, status: str, error: str | None = None):
         con.commit()
 
 def append_error(mount_id: str, msg: str) -> None:
-    """Append message to existing error without overwriting."""
+    """
+    Append a message to the existing error field without overwriting it.
+
+    Useful when cleanup fails: you keep the original BIDSIF failure error
+    but also add "Cleanup error: ..."
+
+    Error text is capped at 4000 characters to keep DB/UI manageable.
+    """
     msg = (msg or "").strip()
     if not msg:
         return

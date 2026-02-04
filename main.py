@@ -23,6 +23,32 @@ from db import (
     append_error
 )
 
+
+# -----------------------------------------------------------------------------
+# FastAPI app entrypoint for the VM project
+#
+# Two big responsibilities live here:
+# 1) HTTP API:
+#    - /submit mounts dataset and queues a job in SQLite
+#    - /mounts returns the job list for the UI
+#    - / serves the web UI
+#
+# 2) Background worker(s):
+#    - Many asyncio tasks polling SQLite for queued jobs (claim_next_job)
+#    - For each job:
+#        - prepare config file
+#        - run BIDSIF
+#        - validate success
+#        - set DB status
+#        - cleanup (unmount, delete temp config)
+#
+# Key concurrency idea:
+# - /submit can be called by many users at once
+# - Jobs are queued in DB
+# - Workers claim jobs one-by-one atomically using SQLite transactions
+# -----------------------------------------------------------------------------
+
+
 app = FastAPI()
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -33,15 +59,20 @@ BIDSIF_DIR = (BASE_DIR.parent / "bidsif").resolve()
 BIDSIF_SCRIPT = BIDSIF_DIR / "bidsify.py"
 BIDSIF_PYTHON = BIDSIF_DIR / ".venv_bidsif" / "bin" / "python"
 
+# Fail early if BIDSIF environment isn't present
 if not BIDSIF_PYTHON.exists():
     raise RuntimeError(f"BIDSIF venv python not found at {BIDSIF_PYTHON}")
 if not BIDSIF_SCRIPT.exists():
     raise RuntimeError(f"Script not found at {BIDSIF_SCRIPT}")
 
-
+# Serve static frontend assets
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# ---------- MODELS ----------
+
+# -----------------------------------------------------------------------------
+# Request model (what the UI/client sends on /submit)
+# -----------------------------------------------------------------------------
+
 
 class SubmitRequest(BaseModel):
     unc: str
@@ -49,18 +80,32 @@ class SubmitRequest(BaseModel):
     username: str
     password: str
 
-# ---------- ROUTES ----------
+# -----------------------------------------------------------------------------
+# Routes
+# -----------------------------------------------------------------------------
+
 
 @app.get("/")
 def home():
+    """Serve the web UI homepage."""
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 @app.get("/mounts")
 def get_mounts():
+    """
+    Return recent jobs to the UI.
+    This returns user-friendly refs (no internal VM paths).
+    """
     return list_mounts()
 
 @app.post("/submit")
 async def submit(req: SubmitRequest):
+    """
+    1) Mount the UNC path into the VM (runs in a thread because it blocks)
+    2) Compute output paths and user-friendly refs
+    3) Insert a 'queued' job into DB
+    4) Return job info to UI
+    """
     try:
         mount_id, mountpoint, access_path = await asyncio.to_thread(
             mount_dataset,
@@ -70,12 +115,17 @@ async def submit(req: SubmitRequest):
             req.subdir
         )
     except Exception as e:
+        # Any mount failure is reported as HTTP 400 for the client
         raise HTTPException(status_code=400, detail=str(e))
 
+    # Internal paths used by the worker
     output_path = compute_output_path(mountpoint, req.subdir)
+    
+    # User-visible "ref" paths shown in UI
     input_ref = compute_input_ref(req.unc, req.subdir)
     output_ref = compute_output_ref(req.unc, req.subdir)
 
+    # Store job in DB (queue it)
     insert_mount_success(
         mount_id=mount_id,
         username=req.username.strip(),
@@ -88,6 +138,7 @@ async def submit(req: SubmitRequest):
         status="queued"
     )
 
+    # Return a summary to the UI
     return {
         "mount_id": mount_id,
         "created_at": now_iso(),
@@ -98,11 +149,25 @@ async def submit(req: SubmitRequest):
         "status": "queued",
     }
 
-# ---------- BIDSIF WORKER ----------
-#extract total cpus and set max workers accordingly
+
+# -----------------------------------------------------------------------------
+# BIDSIF worker machinery
+# -----------------------------------------------------------------------------
+
+
+# Number of worker tasks spawned.
+# NOTE: This is NOT a threadpool size; it's the number of asyncio tasks. (How many datsets to BIDSIFy in parallel.)
 MAX_WORKERS = os.cpu_count() or 1
 
 def prepare_bids_config(job: dict) -> Path:
+    """
+    Prepare a temporary BIDSIF config file for this job by:
+    - reading bids_configurator.txt from the mounted dataset
+    - overriding input_path/output_path in DEFAULT section
+    - writing a /tmp/bids_config_<mount_id>.txt
+
+    This keeps BIDSIF "per job" and avoids editing the dataset.
+    """
     input_path = Path(job["input_path"])
     output_path = Path(job["output_path"])
 
@@ -130,6 +195,10 @@ def prepare_bids_config(job: dict) -> Path:
     return tmp_cfg
 
 def run_bidsif(config_path: Path):
+    """
+    Execute BIDSIF (bidsify.py) using the dedicated virtualenv python.
+    capture_output=True collects stdout/stderr for logging on failure.
+    """
     return subprocess.run(
         [str(BIDSIF_PYTHON), str(BIDSIF_SCRIPT), "--config", str(config_path)],
         cwd=str(BIDSIF_DIR),
@@ -139,16 +208,21 @@ def run_bidsif(config_path: Path):
 
 def mountpoint_from_input_path(input_path: str, mount_id: str) -> str:
     """
-    input_path example:
-      /home/crpn/mnt/cifs_<mount_id>/sub_a/sub_b/dataset
-    mountpoint should be:
+    Derive the mountpoint from the mount_id.
+    The input_path may include subdirectories; mountpoint is always:
       /home/crpn/mnt/cifs_<mount_id>
+
+    NOTE: This relies on the convention used by main_mounting.py.
     """
     # safest: build it directly from known convention
     return f"/home/crpn/mnt/cifs_{mount_id}"
 
 def cleanup_job_artifacts(mount_id: str, input_path: str):
-    # 1) delete temp config
+    """
+    Cleanup after a job (success or fail):
+    1) remove /tmp/bids_config_<mount_id>.txt
+    2) unmount and remove mountpoint directory
+    """
     tmp_cfg = Path("/tmp") / f"bids_config_{mount_id}.txt"
     try:
         tmp_cfg.unlink(missing_ok=True)
@@ -161,8 +235,20 @@ def cleanup_job_artifacts(mount_id: str, input_path: str):
 
 
 async def bidsif_worker(worker_id: int):
+    """
+    Infinite worker loop:
+    - Claim a queued job from the DB (atomic)
+    - Prepare config
+    - Run BIDSIF
+    - Validate success by checking participants.tsv
+    - Update job status (success/failed)
+    - Always cleanup mount and temp files
+    """
     while True:
+        # Claiming uses SQLite writes → blocking → move into a thread
         job = await asyncio.to_thread(claim_next_job)
+        
+        # If nothing is queued, wait and poll again
         if job is None:
             await asyncio.sleep(1)
             continue
@@ -171,10 +257,14 @@ async def bidsif_worker(worker_id: int):
         input_path = job["input_path"]
 
         try:
+            # Prepare temp config
             cfg = await asyncio.to_thread(prepare_bids_config, job)
+            
+            # Run BIDSIF
             result = await asyncio.to_thread(run_bidsif, cfg)
 
-            # Safety check: output exists
+            # Simple "did it work?" validation:
+            # if BIDSIF says success AND expected file exists
             expected = Path(job["output_path"]) / "participants.tsv"
             if result.returncode == 0 and expected.exists():
                 await asyncio.to_thread(set_job_status, mount_id, "success", None)
@@ -192,6 +282,7 @@ async def bidsif_worker(worker_id: int):
 
 
         except Exception as e:
+            # Any unexpected crash becomes "failed"
             await asyncio.to_thread(set_job_status, mount_id, "failed", str(e)[:2000])
 
         finally:
@@ -204,10 +295,18 @@ async def bidsif_worker(worker_id: int):
 
 
 
-# ---------- STARTUP ----------
+# -----------------------------------------------------------------------------
+# Startup: init DB + launch worker tasks
+# -----------------------------------------------------------------------------
+
 
 @app.on_event("startup")
 async def startup():
+    """
+    At API startup:
+    - Create DB schema
+    - Launch worker tasks (MAX_WORKERS)
+    """
     init_db()
     for i in range(MAX_WORKERS):
         asyncio.create_task(bidsif_worker(i + 1))

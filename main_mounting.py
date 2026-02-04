@@ -3,19 +3,44 @@ import subprocess
 import tempfile
 import uuid
 
+# -----------------------------------------------------------------------------
+# CIFS Mounting module
+#
+# Purpose:
+# - Mount a user-provided UNC path into the VM filesystem using sudo mount.cifs
+# - Validate that the requested subdir exists *inside* the mount
+# - Return stable IDs and paths for later processing
+#
+# Security/robustness choices:
+# - Credentials are written to a temp file with 0600 permissions
+# - Credentials file is deleted immediately after successful mount
+# - Subdir is sanitized to prevent traversal (..)
+# - Unique mountpoint per request using a random UUID (mount_id)
+# -----------------------------------------------------------------------------
+
+
 MOUNT_BASE = "/home/crpn/mnt"
 MOUNT_OPTS_BASE = "uid=1000,gid=1000,forceuid,forcegid,vers=3.0"
 DOMAIN = "salsa"
 
 def run(cmd):
-    """Run a command and raise on failure."""
+    """Run a command and raise on failure (subprocess.run(check=True))."""
     subprocess.run(cmd, check=True)
 
 
 def subdir_exists_and_is_dir(path: str) -> bool:
+    """Return True if path exists and is a directory."""
     return os.path.exists(path) and os.path.isdir(path)
 
 def sanitize_subdir(s: str) -> str:
+    """
+    Normalize and validate a subdirectory string.
+
+    - Converts backslashes to slashes
+    - Strips leading slash
+    - Removes empty and '.' segments
+    - Rejects any '..' segment to prevent directory traversal
+    """
     s = (s or "").strip().replace("\\", "/").lstrip("/")
     if s == "" or s == ".":
         return ""
@@ -26,16 +51,27 @@ def sanitize_subdir(s: str) -> str:
     return "/".join(parts)
 
 def build_access_path(base: str, subdir: str) -> str:
+    """
+    Build the final internal path the worker will use:
+      base mountpoint + cleaned subdir (if any)
+    """
     return os.path.join(base, subdir) if subdir else base
 
 def generate_mount_id() -> str:
-    """Stable ID suitable for DB primary key."""
+    """
+    Create a stable random ID suitable for a DB primary key.
+    """
     return uuid.uuid4().hex  # 32 hex chars
 
 def make_mountpoint_from_id(mount_id: str) -> str:
     """
     Create a mountpoint directory derived from mount_id.
-    This makes the ID the source of truth, not the temp name.
+
+    Example:
+      mount_id = abc123...
+      mountpoint = /home/crpn/mnt/cifs_abc123...
+
+    This makes mount_id the source of truth (nice for tracking/cleanup).
     """
     os.makedirs(MOUNT_BASE, exist_ok=True)
     mountpoint = os.path.join(MOUNT_BASE, f"cifs_{mount_id}")
@@ -44,10 +80,17 @@ def make_mountpoint_from_id(mount_id: str) -> str:
 
 def mount_dataset(unc: str, username: str, password: str, subdir: str):
     """
-    Mounts CIFS share to a mountpoint derived from a DB-safe ID, validates subdir once, returns:
+    Mount a CIFS share into the VM and validate a requested subdirectory.
+
+    Returns:
       (mount_id, mountpoint, access_path)
 
-    Raises on failure. Credentials file is deleted immediately after mount.
+    - mount_id: stable ID saved in DB
+    - mountpoint: /home/crpn/mnt/cifs_<id>
+    - access_path: mountpoint/<subdir> (or mountpoint if subdir empty)
+
+    Raises:
+      ValueError, FileNotFoundError, subprocess.CalledProcessError, ...
     """
     UNC = (unc or "").strip()
     username = (username or "").strip()
@@ -119,7 +162,10 @@ def mount_dataset(unc: str, username: str, password: str, subdir: str):
         raise
 
 def unmount_and_cleanup(mountpoint: str):
-    """Best-effort unmount and delete mountpoint directory."""
+    """
+    Unmount and delete mountpoint directory.
+    Called after job finishes (success or fail).
+    """
     try:
         run(["sudo", "umount", mountpoint])
     except Exception:
