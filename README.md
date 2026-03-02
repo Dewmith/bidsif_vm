@@ -119,8 +119,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 ## Step 6 : Connect to the web interface from your local machine.
 
-> 🚀 **Open your browser and go to:**  
-> `http://10.184.12.152:8000`
+Open your browser and go to http://10.184.12.152:8000
 
 ## Step 7 : User Interface Instructions
 
@@ -193,8 +192,7 @@ If the service is running, you should see:
 Active: active (running)
 ```
 
-> 🚀 **Open your browser and go to:**  
-> `http://10.184.12.152:8000`
+Then open your browser and go to http://10.184.12.152:8000
 
 ---
 
