@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pathlib import Path
 import asyncio
+import json
 import subprocess
 import sys
 import configparser
@@ -53,17 +54,73 @@ app = FastAPI()
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+DEFAULT_CONVERTER_CONFIG = BASE_DIR / "converter_package.json"
 
-#BIDSIF location (might have to change for reusability)
-BIDSIF_DIR = (BASE_DIR.parent / "bidsif").resolve()
-BIDSIF_SCRIPT = BIDSIF_DIR / "bidsify.py"
-BIDSIF_PYTHON = BIDSIF_DIR / ".venv_bidsif" / "bin" / "python"
 
-# Fail early if BIDSIF environment isn't present
-if not BIDSIF_PYTHON.exists():
-    raise RuntimeError(f"BIDSIF venv python not found at {BIDSIF_PYTHON}")
-if not BIDSIF_SCRIPT.exists():
-    raise RuntimeError(f"Script not found at {BIDSIF_SCRIPT}")
+def _resolve_path(raw_path: str, base_dir: Path) -> Path:
+    """
+    Resolve a path from config.
+    - absolute path stays absolute
+    - relative path is resolved from base_dir
+    """
+    p = Path(raw_path).expanduser()
+    return p if p.is_absolute() else (base_dir / p).resolve()
+
+
+def load_converter_runtime():
+    """
+    Load converter package locations from JSON config.
+
+    Config path:
+    - env BIDSIF_PACKAGE_CONFIG (optional)
+    - fallback: ./converter_package.json
+
+    Required keys:
+    - package_dir: base directory of the package
+    - script_path: script path (absolute or relative to package_dir)
+    - python_path: venv python path (absolute or relative to package_dir)
+    """
+    config_path_raw = os.environ.get("BIDSIF_PACKAGE_CONFIG")
+    config_path = _resolve_path(config_path_raw, BASE_DIR) if config_path_raw else DEFAULT_CONVERTER_CONFIG
+
+    if not config_path.exists():
+        raise RuntimeError(f"Converter config not found at {config_path}")
+
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise RuntimeError(f"Invalid JSON in converter config {config_path}: {e}")
+
+    required = ("package_dir", "script_path", "python_path")
+    missing = [k for k in required if not data.get(k)]
+    if missing:
+        raise RuntimeError(
+            f"Missing required key(s) in {config_path}: {', '.join(missing)}"
+        )
+
+    package_dir = _resolve_path(data["package_dir"], config_path.parent)
+    script_path = _resolve_path(data["script_path"], package_dir)
+    python_path = _resolve_path(data["python_path"], package_dir)
+
+    if not package_dir.is_dir():
+        raise RuntimeError(f"Package directory not found: {package_dir}")
+    if not script_path.is_file():
+        raise RuntimeError(f"Converter script not found: {script_path}")
+    if not python_path.is_file():
+        raise RuntimeError(f"Converter python not found: {python_path}")
+
+    return {
+        "config_path": config_path,
+        "package_dir": package_dir,
+        "script_path": script_path,
+        "python_path": python_path,
+    }
+
+
+CONVERTER_RUNTIME = load_converter_runtime()
+CONVERTER_DIR = CONVERTER_RUNTIME["package_dir"]
+CONVERTER_SCRIPT = CONVERTER_RUNTIME["script_path"]
+CONVERTER_PYTHON = CONVERTER_RUNTIME["python_path"]
 
 # Serve static frontend assets
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -196,12 +253,12 @@ def prepare_bids_config(job: dict) -> Path:
 
 def run_bidsif(config_path: Path):
     """
-    Execute BIDSIF (bidsify.py) using the dedicated virtualenv python.
+    Execute the configured converter package using the configured virtualenv python.
     capture_output=True collects stdout/stderr for logging on failure.
     """
     return subprocess.run(
-        [str(BIDSIF_PYTHON), str(BIDSIF_SCRIPT), "--config", str(config_path)],
-        cwd=str(BIDSIF_DIR),
+        [str(CONVERTER_PYTHON), str(CONVERTER_SCRIPT), "--config", str(config_path)],
+        cwd=str(CONVERTER_DIR),
         capture_output=True,
         text=True
     )

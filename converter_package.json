@@ -1,0 +1,5 @@
+{
+  "package_dir": "../bidsif",
+  "script_path": "bidsify.py",
+  "python_path": ".venv_bidsif/bin/python"
+}

@@ -76,22 +76,52 @@ uv pip install -r requirements.txt --python .bidsif_vm_venv
 
 </details>
 
-## Step 3 : Activate the virtual environment.
+## Step 3 : Configure the converter package path (JSON)
+
+This project now reads converter paths from:
+
+```bash
+converter_package.json
+```
+
+Default file content:
+
+```json
+{
+  "package_dir": "../bidsif",
+  "script_path": "bidsify.py",
+  "python_path": ".venv_bidsif/bin/python"
+}
+```
+
+Meaning:
+- `package_dir`: folder containing the conversion package
+- `script_path`: converter script (absolute or relative to `package_dir`)
+- `python_path`: virtualenv python (absolute or relative to `package_dir`)
+
+Optional: point to another config file with:
+
+```bash
+export BIDSIF_PACKAGE_CONFIG=/absolute/path/to/your_converter_package.json
+```
+
+## Step 4 : Activate the virtual environment.
 
 ```bash
 source .bidsif_vm_venv/bin/activate
 ```
-## Step 4 : Run the web interface API.
+
+## Step 5 : Run the web interface API.
 
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-## Step 5 Connect to the web interface from your local machine.
+## Step 6 : Connect to the web interface from your local machine.
 
 Then open your browser and go to http://10.184.12.152:8000
 
-## Step 6 : User Interface Instructions
+## Step 7 : User Interface Instructions
 
 The screenshot below explains how to fill in the fields in the BIDSIF_VM web interface.
 
@@ -101,7 +131,7 @@ Once the the datset is processed and the BIDS conversion is successful, you will
 
 Important note: It is required to have the ```bids_configurator.txt``` filled and placed in your dataset folder for the bidsification process to work. This file contains the necessary information for the BIDS conversion algorithm to correctly convert your dataset into BIDS format.
 
-Follow [BIDSIF repo](https://gitlab.crpn.univ-amu.fr/di-s-c/bidsif) for instructions on filling in the ```bids_configurator.txt```.
+### Follow [BIDSIF repo](https://gitlab.crpn.univ-amu.fr/di-s-c/bidsif) for instructions on filling in the ```bids_configurator.txt```
 
 
 ---
@@ -161,6 +191,8 @@ If the service is running, you should see:
 ```
 Active: active (running)
 ```
+
+Then open your browser and go to http://10.184.12.152:8000
 
 ---
 
