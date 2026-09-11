@@ -1,93 +1,255 @@
 # BIDSIF_VM
 
+## Introduction
+
+**BIDSIF_VM** is a virtual-machine–based web interface designed to simplify and standardize the conversion of neuroimaging datasets into the **BIDS (Brain Imaging Data Structure)** format.
+
+It provides a lightweight, reproducible environment where users can:
+- Configure their dataset using a simple text-based configurator
+- Launch a local web interface to connect to the web API of the Virtual Machine.
+- Add the dataset path to be BIDSified.
+- Run the BIDS conversion algorthmn within the VM and store the BIDSIFied dataset in your DCS storage.
+
+The goal of BIDSIF_VM is to lower the technical barrier to BIDS conversion by providing:
+- A preconfigured Python environment on a VM with all necessary dependencies for BIDS conversion.
+- The same environment for all users, ensuring consistency and reproducibility without worrying about local setup issues.
+
+This README walks you step by step through connecting to the VM, setting up the environment if needed, launching the API, and accessing the interface from your local machine.
+
+## How BIDSIF_VM Works
+
+The diagram below illustrates the overall workflow of **BIDSIF_VM**, from user interaction to dataset processing inside the Virtual Machine.
+
+<p align="center">
+  <img src="Media/Algorithm.jpg" alt="BIDSIF_VM workflow algorithm" width="850">
+</p>
+
+### Overview
+
+The diagram above shows how **BIDSIF_VM** processes from start to finish with multiple submissions. The workflow is as follows:
+
+1. A user interacts with the web interface from their local machine and submits a dataset request.
+2. The request is sent to the Virtual Machine through the web API and validated.
+3. The VM temporarily mounts the requested DCS path using the provided credentials.
+4. Required metadata and job information are stored in an internal database.
+5. The BIDS conversion process (`BIDSIF.py`) is executed inside the VM in a controlled and standardized environment.
+   - Multiple worker processes can handle jobs sequentially to ensure stability.
+6. During processing, the database is updated with the job status (running, success, or failure).
+7. Once processing is complete, the dataset is unmounted from the VM.
+8. User credentials are discarded, and only user-visible references and results remain accessible through the web interface.
+
+This workflow ensures:
+- Secure handling of credentials
+- No permanent mounting of user data
+- Reproducible and isolated BIDS conversion
+- Clear tracking of processing jobs through the UI
+
+## Step 1 
+
+Make sure you are successfully connected to the vm through SSH and that you are in the directory `/home/crpn
+`. 
+
+Verify by typing in `pwd` on the terminal.
+
+> ## 🚨 **Important:**  
+> If you are logging into the VM only to **check whether the application is running**, **stop it**, or **view logs**, you do **not** need to start the API manually.  
+> Please refer to the section **[Additional Feature: Automatic API Startup on VM Boot](#additional-feature-automatic-api-startup-on-vm-boot)** for instructions.
+  
+## Step 2 : Get into the `bidsif_vm` directory.
+
+```bash
+cd /home/crpn/GITLAB/bidsif_vm
+```
+<details>
+<summary><h2>Expand and follow the instructions if the virtual env is not set</h2></summary>
+
+## Step 2.1 : Create the Virtual environment using UV
+
+```bash
+uv venv .bidsif_vm_venv --python 3.10.0
+```
+
+## Step 2.2 : Install the dependencies
+```bash
+uv pip install -r requirements.txt --python .bidsif_vm_venv
+```
+
+</details>
+
+## Step 3 : Configure the converter package path (JSON)
+
+This project now reads converter paths from:
+
+```bash
+converter_package.json
+```
+
+Default file content:
+
+```json
+{
+  "package_dir": "../bidsif",
+  "script_path": "bidsify.py",
+  "python_path": ".venv_bidsif/bin/python"
+}
+```
+
+Meaning:
+- `package_dir`: folder containing the conversion package
+- `script_path`: converter script (absolute or relative to `package_dir`)
+- `python_path`: virtualenv python (absolute or relative to `package_dir`)
+
+Optional: point to another config file with:
+
+```bash
+export BIDSIF_PACKAGE_CONFIG=/absolute/path/to/your_converter_package.json
+```
+
+## Step 4 : Activate the virtual environment.
+
+```bash
+source .bidsif_vm_venv/bin/activate
+```
+
+## Step 5 : Run the web interface API.
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+## Step 6 : Connect to the web interface from your local machine.
+
+Open your browser and go to http://10.184.12.152:8000
+
+## Step 7 : User Interface Instructions
+
+The screenshot below explains how to fill in the fields in the BIDSIF_VM web interface.
+
+![BIDSIF_VM User Interface instructions](Media/User_Interface.jpg)
+
+Once the the datset is processed and the BIDS conversion is successful, you will find the BIDSified dataset in your DCS storage at the path you specified in the `reference output path` field of the database interface.
+
+Important note: It is required to have the ```bids_configurator.txt``` filled and placed in your dataset folder for the bidsification process to work. This file contains the necessary information for the BIDS conversion algorithm to correctly convert your dataset into BIDS format.
+
+### Follow [BIDSIF repo](https://gitlab.crpn.univ-amu.fr/di-s-c/bidsif) for instructions on filling in the ```bids_configurator.txt```
 
 
-## Getting started
+---
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Additional Feature: Automatic API Startup on VM Boot
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+To improve usability and reliability, the BIDSIF_VM API is configured to **start automatically when the VM boots**, without requiring a user to manually activate the virtual environment or run the server command.
 
-## Add your files
+This is implemented using a **systemd service**, which is the standard service manager on Linux systems.
 
-* [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+### What this provides
+- The API starts automatically when the VM starts
+- The service restarts automatically if it crashes
+- No SSH session is required to keep the API running
+- Logs are centralized and persistent
+
+---
+
+### How the automatic startup is implemented
+
+A systemd service file is installed at:
+
+```bash
+/etc/systemd/system/bidsif.service
+```
+
+This service directly runs `uvicorn` from the project’s virtual environment:
+
+```ini
+[Unit]
+Description=BIDSIF VM FastAPI Server
+After=network.target
+
+[Service]
+Type=simple
+User=crpn
+WorkingDirectory=/home/crpn/GITLAB/bidsif_vm
+ExecStart=/home/crpn/GITLAB/bidsif_vm/.bidsif_vm_venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+---
+
+### How to check if the API is running
+
+```bash
+systemctl status bidsif
+```
+
+If the service is running, you should see:
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.crpn.univ-amu.fr/di-s-c/bidsif_vm.git
-git branch -M main
-git push -uf origin main
+Active: active (running)
 ```
 
-## Integrate with your tools
+Then open your browser and go to http://10.184.12.152:8000
 
-* [Set up project integrations](https://gitlab.crpn.univ-amu.fr/di-s-c/bidsif_vm/-/settings/integrations)
+---
 
-## Collaborate with your team
+### How to view API logs
 
-* [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+```bash
+journalctl -u bidsif -f
+```
 
-## Test and Deploy
+---
 
-Use the built-in continuous integration in GitLab.
+### How to start, stop, or restart the service manually
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+Start the service:
+```bash
+sudo systemctl start bidsif
+```
 
-***
+Stop the service:
+```bash
+sudo systemctl stop bidsif
+```
 
-# Editing this README
+Restart the service:
+```bash
+sudo systemctl restart bidsif
+```
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+---
 
-## Suggestions for a good README
+### How to enable or disable automatic startup
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+Enable automatic startup (default):
+```bash
+sudo systemctl enable bidsif
+```
 
-## Name
-Choose a self-explaining name for your project.
+Disable automatic startup:
+```bash
+sudo systemctl disable bidsif
+```
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+---
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+### Summary
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+With this setup, the BIDSIF_VM API behaves like a standard system service:
+- It starts automatically on boot
+- It does not depend on user sessions
+- It can be monitored and controlled in a predictable way
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+This ensures a stable and reproducible environment for all users of the VM.
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+BIDSIF_VM is open-source software licensed under the
+[GNU General Public License version 3.0 only](LICENSE) (`GPL-3.0-only`).
+
+Third-party components and the separately distributed BIDSIF converter remain
+subject to their respective license terms.

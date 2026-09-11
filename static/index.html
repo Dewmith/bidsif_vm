@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>BIDSIF Console</title>
+  <style>
+    :root{
+      --bg:#fafafa;
+      --card:#fff;
+      --border:#ddd;
+      --muted:#666;
+      --text:#111;
+      --ok:#0a7a2f;
+      --err:#b00020;
+    }
+
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .page {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 18px 18px 40px;
+    }
+
+    h1 { margin: 0; }
+    .muted { color: var(--muted); margin-top:6px; }
+
+    .card {
+      background: var(--card);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:14px;
+      margin-top:16px;
+      box-shadow: 0 1px 0 rgba(0,0,0,0.03);
+    }
+
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    @media (max-width: 900px){
+      .row { grid-template-columns: 1fr; }
+    }
+
+    label { font-size: 12px; color:#444; display:block; margin-top:10px; }
+
+    input {
+      width:100%;
+      padding:10px;
+      border:1px solid #ccc;
+      border-radius:10px;
+      margin-top:4px;
+      box-sizing: border-box;
+      background:#fff;
+    }
+
+    button {
+      padding:10px 14px;
+      border:1px solid #222;
+      border-radius:10px;
+      background:#111;
+      color:#fff;
+      cursor:pointer;
+    }
+    button.secondary { background:#fff; color:#111; border-color:#bbb; }
+
+    pre {
+      background:#111;
+      color:#eee;
+      padding:12px;
+      border-radius:10px;
+      overflow:auto;
+      max-height: 280px;
+      margin: 10px 0 0;
+    }
+
+    table {
+      width:100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      table-layout: auto;
+    }
+
+    th, td {
+      border-bottom: 1px solid #eee;
+      padding: 8px;
+      text-align:left;
+      font-size:14px;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+
+    th { font-size: 13px; color:#333; }
+
+    .err { color: var(--err); font-weight:600; }
+    .ok { color: var(--ok); font-weight:600; }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+    }
+
+    .table-wrap { overflow-x: auto; }
+
+    .trunc {
+      max-width: 320px;
+      display: inline-block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: bottom;
+    }
+    .trunc.wide { max-width: 520px; }
+    .trunc.narrow { max-width: 220px; }
+
+    .stickybar {
+      position: sticky;
+      top: 0;
+      z-index: 999;
+      background: rgba(250,250,250,0.92);
+      backdrop-filter: blur(6px);
+      border-bottom: 1px solid #e8e8e8;
+    }
+
+    .sticky-inner {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 10px 18px;
+      display:flex;
+      gap:12px;
+      align-items:center;
+      justify-content: space-between;
+    }
+
+    .pill {
+      display:inline-flex;
+      gap:8px;
+      align-items:center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid #e0e0e0;
+      background: #fff;
+      font-size: 13px;
+      max-width: 70%;
+    }
+
+    .pill strong { font-weight: 650; }
+    .pill .msg { overflow:hidden; text-overflow: ellipsis; }
+
+    .actions { display:flex; gap:10px; align-items:center; }
+  </style>
+</head>
+
+<body>
+
+  <div class="stickybar">
+    <div class="sticky-inner">
+      <div>
+        <strong>BIDSIF Console</strong>
+        <span class="muted" style="margin-left:8px;">VM mount + FIFO bidsify</span>
+      </div>
+
+      <div class="actions">
+        <div id="topStatus" class="pill" title="">
+          <strong>Status:</strong>
+          <span class="msg">Idle</span>
+        </div>
+        <button class="secondary" onclick="refreshMounts()">Refresh</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="page">
+
+    <div class="card">
+      <h3 style="margin:0;">Submit mount</h3>
+
+      <div class="row">
+        <div>
+          <label>UNC path</label>
+          <input id="unc" placeholder='//smb-crpn-isi-stj.univ-amu.fr/crpn$/USers/user_dir' />
+        </div>
+        <div>
+          <label>Sub path to dataset (required)</label>
+          <input id="subdir" placeholder='sub_a/sub_b/dataset_name' required />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Username</label>
+          <input id="username" placeholder="user.name" />
+        </div>
+        <div>
+          <label>Password</label>
+          <input id="password" type="password" placeholder="(not stored)" />
+        </div>
+      </div>
+
+      <div style="display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap: wrap;">
+        <button onclick="submitMount()">Submit</button>
+        <button class="secondary" onclick="clearFields()">Clear</button>
+        <span id="status" class="muted"></span>
+      </div>
+
+      <h4 style="margin-top:14px; margin-bottom:8px;">Response</h4>
+      <pre id="out">{}</pre>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <div>
+          <h3 style="margin:0;">Process Database</h3>
+          <div class="muted">Auto-refresh every 2 seconds. Search by username or mount_id.</div>
+        </div>
+        <div style="min-width:320px; flex: 1; max-width:520px;">
+          <label style="margin-top:0;">Search</label>
+          <input id="search" placeholder="Type username or mount_id…" oninput="applyFilter()" />
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="min-width: 110px;">status</th>
+              <th style="min-width: 220px;">created_at</th>
+              <th style="min-width: 120px;">username</th>
+              <th style="min-width: 240px;">mount_id</th>
+              <th style="min-width: 240px;">subdir</th>
+              <th style="min-width: 360px;">reference output path</th>
+              <th style="min-width: 360px;">error</th>
+            </tr>
+          </thead>
+          <tbody id="rows">
+            <tr><td colspan="7" class="muted">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+  let ALL_ROWS = [];
+
+  function setTopStatus(kind, msg){
+    const el = document.getElementById("topStatus");
+    const span = el.querySelector(".msg");
+
+    span.textContent = msg || "Idle";
+    el.title = msg || "";
+
+    el.style.borderColor = "#e0e0e0";
+    el.style.color = "#111";
+
+    if (kind === "ok"){
+      el.style.borderColor = "#bfe9cb";
+      el.style.color = "#0a7a2f";
+    } else if (kind === "err"){
+      el.style.borderColor = "#f2b8b8";
+      el.style.color = "#b00020";
+    }
+  }
+
+  async function api(path, opts={}) {
+    const res = await fetch(path, {
+      headers: {"Content-Type":"application/json"},
+      ...opts
+    });
+    const text = await res.text();
+    let data;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!res.ok) throw {status: res.status, detail: data};
+    return data;
+  }
+
+  function esc(s){
+    return (s ?? "").toString()
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;");
+  }
+
+  function computeReferenceOutputPath(unc, subdir) {
+    const u = (unc || "").trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    const parts = u.split("/");
+
+    let idx = -1;
+    for (let i = 0; i < parts.length; i++) {
+      if ((parts[i] || "").toLowerCase() === "users") { idx = i; break; }
+    }
+    const base = idx >= 0 ? parts.slice(idx).join("/") : parts.slice(-2).join("/");
+
+    const s = (subdir || "").trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    if (!s) return `${base}/BIDSIFied_ROOT`;
+
+    const sp = s.split("/");
+    const parent = sp.slice(0, -1).join("/");
+    const last = sp[sp.length - 1];
+    return parent ? `${base}/${parent}/BIDSIFied_${last}` : `${base}/BIDSIFied_${last}`;
+  }
+
+  function clearFields() {
+    document.getElementById("unc").value = "";
+    document.getElementById("subdir").value = "";
+    document.getElementById("username").value = "";
+    document.getElementById("password").value = "";
+
+    document.getElementById("status").textContent = "";
+    document.getElementById("out").textContent = "{}";
+    setTopStatus(null, "Idle");
+  }
+
+  async function submitMount(){
+    const status = document.getElementById("status");
+    const out = document.getElementById("out");
+    status.textContent = "Submitting…";
+    out.textContent = "";
+    setTopStatus(null, "Submitting…");
+
+    const payload = {
+      unc: document.getElementById("unc").value.trim(),
+      subdir: document.getElementById("subdir").value.trim(),
+      username: document.getElementById("username").value.trim(),
+      password: document.getElementById("password").value
+    };
+
+    const nothingEntered = !payload.unc && !payload.subdir && !payload.username && !payload.password;
+    if (nothingEntered) {
+      const msg = "Enter data before submission.";
+      status.innerHTML = `<span class="err">${esc(msg)}</span>`;
+      out.textContent = msg;
+      setTopStatus("err", msg);
+      return;
+    }
+
+    if (!payload.subdir) {
+      const msg = "Subdirectory is required.";
+      status.innerHTML = `<span class="err">${esc(msg)}</span>`;
+      out.textContent = "Please enter a subdirectory (e.g. sub_a/sub_b/dataset_name).";
+      setTopStatus("err", msg);
+      return;
+    }
+
+    try {
+      const data = await api("/submit", {method:"POST", body: JSON.stringify(payload)});
+      status.innerHTML = '<span class="ok">OK</span>';
+      out.textContent = JSON.stringify(data, null, 2);
+      document.getElementById("password").value = "";
+      setTopStatus("ok", "Submitted. Mount created and queued.");
+      await refreshMounts();
+    } catch(e){
+      status.innerHTML = `<span class="err">Error (${e.status})</span>`;
+      out.textContent = JSON.stringify(e.detail, null, 2);
+      setTopStatus("err", `Submit failed (${e.status})`);
+    }
+  }
+
+  function renderRows(query){
+    const rowsEl = document.getElementById("rows");
+    const q = (query || "").toLowerCase().trim();
+
+    const filtered = !q ? ALL_ROWS : ALL_ROWS.filter(r => {
+      const username = (r.username || "").toLowerCase();
+      const mountId  = (r.mount_id || "").toLowerCase();
+      return username.includes(q) || mountId.includes(q);
+    });
+
+    if (!filtered || filtered.length === 0){
+      rowsEl.innerHTML = `<tr><td colspan="7" class="muted">No matches.</td></tr>`;
+      return;
+    }
+
+    rowsEl.innerHTML = filtered.map(r => {
+      const refOut = r.reference_output_path || r.output_ref || computeReferenceOutputPath(r.unc, r.subdir);
+      const err = r.error || "";
+
+      const st = (r.status || "").toLowerCase();
+      const stClass = st === "success" ? "ok" : (st === "failed" ? "err" : "");
+
+      return `
+        <tr>
+          <td><span class="${stClass}">${esc(r.status)}</span></td>
+          <td class="mono">${esc(r.created_at)}</td>
+          <td>${esc(r.username)}</td>
+          <td class="mono"><span class="trunc wide" title="${esc(r.mount_id)}">${esc(r.mount_id)}</span></td>
+          <td><span class="trunc wide" title="${esc(r.subdir)}">${esc(r.subdir)}</span></td>
+          <td class="mono"><span class="trunc wide" title="${esc(refOut)}">${esc(refOut)}</span></td>
+          <td class="mono"><span class="trunc wide" title="${esc(err)}">${esc(err)}</span></td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  function applyFilter(){
+    const q = (document.getElementById("search")?.value || "").toLowerCase().trim();
+    renderRows(q);
+  }
+
+  async function refreshMounts(){
+    const rowsEl = document.getElementById("rows");
+    try{
+      const rows = await api("/mounts");
+      ALL_ROWS = rows || [];
+
+      applyFilter(); // render with whatever search text is in the box
+
+      const running = ALL_ROWS.filter(x => (x.status||"").toLowerCase() === "running").length;
+      const waiting = ALL_ROWS.filter(x => (x.status||"").toLowerCase() === "queued").length;
+
+      if (running > 0) setTopStatus(null, `Running: ${running} | Waiting: ${waiting}`);
+      else setTopStatus(null, `Idle | Waiting: ${waiting}`);
+
+    } catch(e){
+      rowsEl.innerHTML = `<tr><td colspan="7" class="err">Failed: ${esc(JSON.stringify(e.detail))}</td></tr>`;
+      setTopStatus("err", "Failed to refresh /mounts");
+    }
+  }
+
+  refreshMounts();
+  setInterval(refreshMounts, 2000);
+</script>
+</body>
+</html>
