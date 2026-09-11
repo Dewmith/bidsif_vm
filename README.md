@@ -245,3 +245,11 @@ With this setup, the BIDSIF_VM API behaves like a standard system service:
 - It can be monitored and controlled in a predictable way
 
 This ensures a stable and reproducible environment for all users of the VM.
+
+## License
+
+BIDSIF_VM is open-source software licensed under the
+[GNU General Public License version 3.0 only](LICENSE) (`GPL-3.0-only`).
+
+Third-party components and the separately distributed BIDSIF converter remain
+subject to their respective license terms.
